@@ -1,7 +1,6 @@
 import os
 import html
 import secrets
-import socket
 import sqlite3
 from datetime import datetime
 from functools import wraps
@@ -11,16 +10,15 @@ from flask import (
     Flask,
     request,
     redirect,
-    session,
     url_for,
+    session,
     abort,
+    jsonify,
 )
-from flask_socketio import SocketIO, join_room
 
 
 # ============================================================
 # MATIA // SECURITY CHECK
-# Authorized Security Assessment Portal
 # ============================================================
 
 APP_NAME = "MATIA // SECURITY CHECK"
@@ -30,8 +28,28 @@ ADMIN_EMAIL = os.getenv(
     "kleimatia1@gmail.com"
 ).strip().lower()
 
-ADMIN_PASSWORD = os.getenv("MATIA_ADMIN_PASSWORD")
-SECRET_KEY = os.getenv("MATIA_SECRET_KEY")
+ADMIN_PASSWORD = os.getenv(
+    "MATIA_ADMIN_PASSWORD",
+    ""
+)
+
+SECRET_KEY = os.getenv(
+    "MATIA_SECRET_KEY",
+    ""
+)
+
+DB_FILE = os.getenv(
+    "MATIA_DB_FILE",
+    "matia_security.db"
+)
+
+PORT = int(
+    os.getenv(
+        "PORT",
+        "5000"
+    )
+)
+
 
 if not ADMIN_PASSWORD:
     raise RuntimeError(
@@ -43,301 +61,45 @@ if not SECRET_KEY:
         "MATIA_SECRET_KEY is missing."
     )
 
-DB_FILE = os.getenv(
-    "MATIA_DB_FILE",
-    "matia_security.db"
-)
 
-PORT = int(os.getenv("PORT", "5000"))
+# ============================================================
+# FLASK
+# ============================================================
 
 app = Flask(__name__)
 
-app.config["SECRET_KEY"] = SECRET_KEY
-app.config["SESSION_COOKIE_HTTPONLY"] = True
-app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-app.config["SESSION_COOKIE_SECURE"] = (
-    os.getenv("COOKIE_SECURE", "true").lower() == "true"
+app.config.update(
+    SECRET_KEY=SECRET_KEY,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=(
+        os.getenv(
+            "COOKIE_SECURE",
+            "true"
+        ).lower() == "true"
+    ),
 )
-
-socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
-    async_mode="threading"
-)
-
-
-# ============================================================
-# DATABASE
-# ============================================================
-
-def db():
-    connection = sqlite3.connect(DB_FILE)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def ensure_column(connection, table, column, definition):
-    existing = {
-        row["name"]
-        for row in connection.execute(
-            f"PRAGMA table_info({table})"
-        ).fetchall()
-    }
-
-    if column not in existing:
-        connection.execute(
-            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
-        )
-
-
-def init_db():
-    connection = db()
-
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_token TEXT UNIQUE,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            web_name TEXT NOT NULL,
-            target TEXT NOT NULL,
-            scope TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'PENDING',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            client_ip TEXT
-        )
-    """)
-
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id INTEGER NOT NULL,
-            sender TEXT NOT NULL,
-            message TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(request_id) REFERENCES requests(id)
-        )
-    """)
-
-    connection.execute("""
-        CREATE TABLE IF NOT EXISTS findings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            severity TEXT NOT NULL,
-            description TEXT NOT NULL,
-            evidence TEXT NOT NULL,
-            recommendation TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(request_id) REFERENCES requests(id)
-        )
-    """)
-
-    ensure_column(
-        connection,
-        "requests",
-        "client_token",
-        "TEXT"
-    )
-
-    ensure_column(
-        connection,
-        "requests",
-        "web_name",
-        "TEXT"
-    )
-
-    connection.commit()
-
-    rows = connection.execute(
-        """
-        SELECT id, client_token, web_name
-        FROM requests
-        """
-    ).fetchall()
-
-    for row in rows:
-        token = row["client_token"]
-        web_name = row["web_name"]
-        changed = False
-
-        if not token:
-            token = secrets.token_urlsafe(32)
-            changed = True
-
-        if not web_name:
-            web_name = "Unnamed Website"
-            changed = True
-
-        if changed:
-            connection.execute(
-                """
-                UPDATE requests
-                SET client_token = ?, web_name = ?
-                WHERE id = ?
-                """,
-                (
-                    token,
-                    web_name,
-                    row["id"]
-                )
-            )
-
-    connection.commit()
-    connection.close()
-
-
-# ============================================================
-# HELPERS
-# ============================================================
-
-def now():
-    return datetime.utcnow().strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
-    )
-
-
-def esc(value):
-    return html.escape(
-        str(value or ""),
-        quote=True
-    )
-
-
-def valid_target(target):
-    try:
-        parsed = urlparse(
-            target.strip()
-        )
-
-        return (
-            parsed.scheme in ("http", "https")
-            and bool(parsed.netloc)
-        )
-
-    except Exception:
-        return False
-
-
-def resolve_target(target):
-    try:
-        hostname = urlparse(
-            target
-        ).hostname
-
-        if not hostname:
-            return None
-
-        return socket.gethostbyname(
-            hostname
-        )
-
-    except Exception:
-        return None
-
-
-def get_request(request_id):
-    connection = db()
-
-    row = connection.execute(
-        """
-        SELECT *
-        FROM requests
-        WHERE id = ?
-        """,
-        (request_id,)
-    ).fetchone()
-
-    connection.close()
-
-    return row
-
-
-def client_authorized(request_id, token):
-    if not token:
-        return False
-
-    connection = db()
-
-    row = connection.execute(
-        """
-        SELECT id
-        FROM requests
-        WHERE id = ?
-        AND client_token = ?
-        """,
-        (
-            request_id,
-            token
-        )
-    ).fetchone()
-
-    connection.close()
-
-    return row is not None
-
-
-def admin_required(fn):
-
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-
-        if not session.get(
-            "admin_logged_in"
-        ):
-            return redirect(
-                url_for("admin_login")
-            )
-
-        return fn(
-            *args,
-            **kwargs
-        )
-
-    return wrapper
-
-
-def severity_class(severity):
-
-    value = (
-        severity or ""
-    ).upper()
-
-    if value == "CRITICAL":
-        return "critical"
-
-    if value == "HIGH":
-        return "high"
-
-    if value == "MEDIUM":
-        return "medium"
-
-    if value == "LOW":
-        return "low"
-
-    return "info"
 
 
 # ============================================================
 # CSS
 # ============================================================
 
-BASE_CSS = r"""
+CSS = r"""
 :root{
-    --bg:#06070b;
-    --panel:#0d1118;
-    --panel2:#111722;
-    --border:#1d2735;
-    --text:#eef4ff;
-    --muted:#91a0b5;
+    --bg:#05070b;
+    --panel:#0c121b;
+    --panel2:#111927;
+    --border:#1f2b3d;
+    --text:#edf4ff;
+    --muted:#8fa1b9;
     --accent:#6d7cff;
-    --accent2:#00e5ff;
-    --green:#23e68a;
+    --cyan:#00e5ff;
+    --green:#24e99a;
+    --red:#ff5069;
     --yellow:#ffc857;
-    --orange:#ff8a3d;
-    --red:#ff4d67;
-    --shadow:0 20px 60px rgba(0,0,0,.35);
+    --orange:#ff9150;
+    --shadow:0 24px 80px rgba(0,0,0,.36);
 }
 
 *{
@@ -350,32 +112,34 @@ html{
 
 body{
     margin:0;
-    background:
-        radial-gradient(
-            circle at 15% 10%,
-            rgba(109,124,255,.12),
-            transparent 30%
-        ),
-        radial-gradient(
-            circle at 85% 20%,
-            rgba(0,229,255,.08),
-            transparent 30%
-        ),
-        linear-gradient(
-            180deg,
-            #05060a,
-            #080b11 55%,
-            #05070b
-        );
+    min-height:100vh;
     color:var(--text);
     font-family:
         Inter,
+        ui-sans-serif,
         system-ui,
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
         sans-serif;
-    min-height:100vh;
+
+    background:
+        radial-gradient(
+            circle at 10% 0%,
+            rgba(109,124,255,.17),
+            transparent 28%
+        ),
+        radial-gradient(
+            circle at 100% 10%,
+            rgba(0,229,255,.09),
+            transparent 25%
+        ),
+        linear-gradient(
+            180deg,
+            #04060a,
+            #080c12 55%,
+            #05070b
+        );
 }
 
 a{
@@ -383,115 +147,177 @@ a{
     text-decoration:none;
 }
 
-.container{
+button,
+input,
+textarea,
+select{
+    font:inherit;
+}
+
+.wrap{
     width:min(1180px,92%);
     margin:auto;
 }
 
-.topbar{
+.top{
     position:sticky;
     top:0;
-    z-index:50;
-    backdrop-filter:blur(18px);
-    background:rgba(5,7,11,.75);
-    border-bottom:1px solid rgba(255,255,255,.06);
+    z-index:100;
+
+    background:rgba(4,6,10,.78);
+    backdrop-filter:blur(16px);
+
+    border-bottom:
+        1px solid rgba(255,255,255,.06);
 }
 
 .nav{
     height:72px;
+
     display:flex;
     align-items:center;
     justify-content:space-between;
+
     gap:20px;
 }
 
 .brand{
     display:flex;
     align-items:center;
-    gap:12px;
-    font-weight:900;
-    letter-spacing:.8px;
+    gap:11px;
+
+    font-weight:950;
+    letter-spacing:.7px;
 }
 
-.brand-mark{
-    width:38px;
-    height:38px;
+.logo{
+    width:39px;
+    height:39px;
+
     display:grid;
     place-items:center;
+
     border-radius:12px;
+
     background:
         linear-gradient(
             135deg,
             var(--accent),
-            var(--accent2)
+            var(--cyan)
         );
-    color:#05070b;
+
+    color:#03060b;
+
     box-shadow:
-        0 0 30px
+        0 0 32px
         rgba(109,124,255,.35);
 }
 
 .brand small{
     display:block;
-    font-size:10px;
-    color:var(--muted);
-    letter-spacing:1.8px;
+
     margin-top:2px;
-}
 
-.navlinks{
-    display:flex;
-    align-items:center;
-    gap:8px;
-}
-
-.navlinks a{
-    padding:10px 12px;
-    border-radius:10px;
     color:var(--muted);
+
+    font-size:9px;
+    letter-spacing:1.7px;
+}
+
+.links{
+    display:flex;
+    gap:5px;
+}
+
+.links a{
+    padding:10px 12px;
+
+    color:var(--muted);
+
+    border-radius:10px;
+
     transition:.2s;
 }
 
-.navlinks a:hover{
+.links a:hover{
     color:var(--text);
     background:rgba(255,255,255,.05);
 }
 
 .hero{
-    padding:90px 0 45px;
+    padding:92px 0 48px;
 }
 
-.hero-grid{
+.hero-grid,
+.two{
     display:grid;
-    grid-template-columns:1.2fr .8fr;
-    gap:25px;
+
+    grid-template-columns:
+        1.12fr .88fr;
+
+    gap:20px;
+}
+
+.status{
+    display:flex;
+    align-items:center;
+
+    gap:9px;
+
+    color:var(--green);
+
+    font-size:12px;
+    font-weight:850;
+
+    letter-spacing:.5px;
+}
+
+.dot{
+    width:8px;
+    height:8px;
+
+    border-radius:999px;
+
+    background:var(--green);
+
+    box-shadow:
+        0 0 16px var(--green);
 }
 
 .hero h1{
-    font-size:clamp(42px,7vw,82px);
-    line-height:.95;
-    margin:0 0 22px;
+    margin:
+        12px 0 20px;
+
+    font-size:
+        clamp(
+            46px,
+            7vw,
+            86px
+        );
+
+    line-height:.93;
+
     letter-spacing:-4px;
 }
 
-.gradient-text{
+.grad{
     background:
         linear-gradient(
             90deg,
-            #fff,
-            var(--accent2),
-            #8d96ff
+            #ffffff,
+            var(--cyan),
+            #99a0ff
         );
+
     -webkit-background-clip:text;
     background-clip:text;
+
     color:transparent;
 }
 
-.hero p{
+.muted{
     color:var(--muted);
-    line-height:1.8;
-    max-width:720px;
-    font-size:17px;
+    line-height:1.72;
 }
 
 .panel{
@@ -499,105 +325,123 @@ a{
         linear-gradient(
             180deg,
             rgba(255,255,255,.035),
-            rgba(255,255,255,.015)
+            rgba(255,255,255,.012)
         ),
         var(--panel);
-    border:1px solid var(--border);
+
+    border:
+        1px solid var(--border);
+
     border-radius:22px;
+
     box-shadow:var(--shadow);
 }
 
-.hero-card{
-    padding:25px;
-    position:relative;
-    overflow:hidden;
+.card{
+    padding:22px;
 }
 
-.hero-card::before{
-    content:"";
-    position:absolute;
-    width:220px;
-    height:220px;
-    right:-100px;
-    top:-100px;
-    background:
-        radial-gradient(
-            circle,
-            rgba(0,229,255,.22),
-            transparent 70%
-        );
+.code{
+    padding:15px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius:14px;
+
+    background:#05080d;
+
+    color:#b8c7da;
+
+    font:
+        12px/1.9
+        ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        monospace;
 }
 
-.status-line{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    color:var(--green);
-    font-weight:700;
-    margin-bottom:20px;
+.section{
+    padding:36px 0;
 }
 
-.dot{
-    width:9px;
-    height:9px;
-    border-radius:50%;
-    background:var(--green);
-    box-shadow:
-        0 0 15px var(--green);
+.title{
+    margin:
+        0 0 8px;
+
+    font-size:32px;
 }
 
-.stats-grid{
+.sub{
+    margin:0 0 22px;
+
+    color:var(--muted);
+}
+
+.stats,
+.kpis,
+.cards{
     display:grid;
-    grid-template-columns:repeat(3,1fr);
     gap:12px;
-    margin-top:25px;
 }
 
-.stat{
+.stats{
+    grid-template-columns:
+        repeat(3,1fr);
+
+    margin-top:24px;
+}
+
+.kpis{
+    grid-template-columns:
+        repeat(4,1fr);
+}
+
+.cards{
+    grid-template-columns:
+        repeat(3,1fr);
+}
+
+.stat,
+.kpi{
     padding:18px;
-    border:1px solid var(--border);
-    background:rgba(255,255,255,.025);
+
+    border:
+        1px solid var(--border);
+
     border-radius:15px;
+
+    background:
+        rgba(255,255,255,.02);
 }
 
-.stat strong{
+.stat strong,
+.kpi strong{
     display:block;
-    font-size:24px;
-    margin-bottom:5px;
+
+    margin-bottom:4px;
+
+    font-size:25px;
 }
 
-.stat span{
+.stat span,
+.kpi span{
     color:var(--muted);
     font-size:12px;
 }
 
-.section{
-    padding:35px 0;
+.form{
+    width:min(900px,100%);
+    margin:32px auto 70px;
 }
 
-.section-title{
-    font-size:28px;
-    margin:0 0 10px;
-}
-
-.section-sub{
-    color:var(--muted);
-    margin:0 0 22px;
-}
-
-.form-wrap{
-    width:min(850px,100%);
-    margin:35px auto 70px;
-}
-
-.form-panel{
-    padding:30px;
-}
-
-.form-grid{
+.grid{
     display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:18px;
+
+    grid-template-columns:
+        1fr 1fr;
+
+    gap:16px;
 }
 
 .field{
@@ -606,37 +450,52 @@ a{
     gap:8px;
 }
 
-.field.full{
-    grid-column:1/-1;
+.full{
+    grid-column:1 / -1;
 }
 
 label{
+    color:#cad6e7;
+
     font-size:13px;
-    color:#c7d1e1;
-    font-weight:700;
+    font-weight:850;
 }
 
 input,
 textarea,
 select{
     width:100%;
-    border:1px solid var(--border);
-    background:#080b11;
-    color:var(--text);
+
+    padding:
+        14px 15px;
+
+    border:
+        1px solid var(--border);
+
     border-radius:13px;
-    padding:14px 15px;
+
+    background:#080c12;
+
+    color:var(--text);
+
     outline:none;
+
     transition:.2s;
-    font:inherit;
 }
 
 input:focus,
 textarea:focus,
 select:focus{
     border-color:var(--accent);
+
     box-shadow:
         0 0 0 3px
-        rgba(109,124,255,.13);
+        rgba(109,124,255,.12);
+}
+
+input[readonly]{
+    opacity:.85;
+    cursor:not-allowed;
 }
 
 textarea{
@@ -644,360 +503,376 @@ textarea{
     resize:vertical;
 }
 
-.checkbox{
+.check{
     display:flex;
+
     align-items:flex-start;
-    gap:10px;
+
+    gap:9px;
+
     color:var(--muted);
+
     font-size:13px;
     line-height:1.6;
 }
 
-.checkbox input{
+.check input{
     width:auto;
-    margin-top:3px;
+    margin-top:4px;
 }
 
-.btn{
-    border:0;
-    cursor:pointer;
-    border-radius:13px;
-    padding:13px 17px;
-    color:white;
-    font-weight:800;
-    transition:.2s;
-    display:inline-flex;
-    justify-content:center;
-    align-items:center;
+.actions{
+    display:flex;
+    flex-wrap:wrap;
     gap:8px;
 }
 
-.btn-primary{
+.btn{
+    display:inline-flex;
+
+    align-items:center;
+    justify-content:center;
+
+    gap:8px;
+
+    padding:
+        13px 17px;
+
+    border:0;
+    border-radius:12px;
+
+    color:#fff;
+
+    font-weight:900;
+
+    cursor:pointer;
+
+    transition:
+        transform .18s,
+        box-shadow .18s;
+}
+
+.btn:hover{
+    transform:translateY(-1px);
+}
+
+.primary{
     background:
         linear-gradient(
             135deg,
             var(--accent),
-            #8e62ff
+            #8e61ff
         );
+
     box-shadow:
-        0 12px 30px
-        rgba(109,124,255,.2);
+        0 14px 30px
+        rgba(109,124,255,.20);
 }
 
-.btn-primary:hover{
-    transform:translateY(-1px);
-    box-shadow:
-        0 16px 38px
-        rgba(109,124,255,.28);
+.dark{
+    background:#111824;
+
+    border:
+        1px solid var(--border);
 }
 
-.btn-dark{
-    background:#111722;
-    border:1px solid var(--border);
-}
-
-.btn-green{
+.green{
     background:
         linear-gradient(
             135deg,
-            #1bc77b,
-            #0ea85f
+            #1cca7b,
+            #0ca45d
         );
 }
 
-.btn-red{
+.red{
     background:
         linear-gradient(
             135deg,
-            #ff4d67,
-            #e83e57
+            #ff536a,
+            #e33f57
         );
 }
 
 .notice{
-    padding:14px 16px;
-    border-radius:13px;
-    margin-bottom:18px;
-    border:1px solid var(--border);
+    padding:
+        13px 15px;
+
+    margin-bottom:15px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius:12px;
 }
 
-.notice.error{
-    background:rgba(255,77,103,.09);
-    border-color:rgba(255,77,103,.25);
-    color:#ffb8c3;
+.error{
+    color:#ffbac4;
+
+    background:
+        rgba(255,80,105,.09);
+
+    border-color:
+        rgba(255,80,105,.23);
 }
 
-.notice.success{
-    background:rgba(35,230,138,.08);
-    border-color:rgba(35,230,138,.25);
-    color:#9effd1;
+.success{
+    color:#9df9ce;
+
+    background:
+        rgba(36,233,154,.08);
+
+    border-color:
+        rgba(36,233,154,.22);
 }
 
-.cards{
-    display:grid;
-    grid-template-columns:repeat(3,1fr);
-    gap:16px;
-}
-
-.card{
-    padding:20px;
-}
-
-.card h3{
-    margin:0 0 8px;
-}
-
-.muted{
-    color:var(--muted);
-}
-
-.table-wrap{
+.table{
     overflow:auto;
 }
 
-table{
+.table table{
     width:100%;
     border-collapse:collapse;
 }
 
-th,
-td{
-    padding:14px;
+.table th,
+.table td{
+    padding:13px;
+
+    border-bottom:
+        1px solid var(--border);
+
     text-align:left;
-    border-bottom:1px solid var(--border);
+
     white-space:nowrap;
 }
 
-th{
-    color:#9baac0;
-    font-size:12px;
-    text-transform:uppercase;
-    letter-spacing:.7px;
-}
+.table th{
+    color:#93a5bd;
 
-td{
-    color:#e7edf7;
-    font-size:14px;
+    font-size:11px;
+
+    text-transform:uppercase;
 }
 
 .badge{
     display:inline-flex;
-    align-items:center;
-    gap:7px;
-    padding:6px 10px;
+
+    padding:
+        6px 10px;
+
     border-radius:999px;
+
     font-size:11px;
     font-weight:900;
-    letter-spacing:.6px;
-    border:1px solid transparent;
+
+    border:
+        1px solid transparent;
 }
 
-.badge.pending{
-    background:rgba(255,200,87,.09);
-    color:#ffd97f;
-    border-color:rgba(255,200,87,.22);
+.pending{
+    color:#ffd978;
+
+    background:
+        rgba(255,200,87,.08);
+
+    border-color:
+        rgba(255,200,87,.2);
 }
 
-.badge.accepted,
-.badge.completed{
-    background:rgba(35,230,138,.09);
-    color:#7df5b4;
-    border-color:rgba(35,230,138,.22);
+.accepted,
+.completed{
+    color:#80f1b8;
+
+    background:
+        rgba(36,233,154,.08);
+
+    border-color:
+        rgba(36,233,154,.2);
 }
 
-.badge.progress{
-    background:rgba(0,229,255,.09);
-    color:#81f2ff;
-    border-color:rgba(0,229,255,.22);
+.progress{
+    color:#79efff;
+
+    background:
+        rgba(0,229,255,.08);
+
+    border-color:
+        rgba(0,229,255,.2);
 }
 
-.badge.declined{
-    background:rgba(255,77,103,.09);
-    color:#ff9ead;
-    border-color:rgba(255,77,103,.22);
-}
+.declined{
+    color:#ff9eac;
 
-.severity{
-    font-weight:900;
-}
+    background:
+        rgba(255,80,105,.08);
 
-.severity.critical{
-    color:#ff6076;
-}
-
-.severity.high{
-    color:#ff8e65;
-}
-
-.severity.medium{
-    color:#ffd26a;
-}
-
-.severity.low{
-    color:#65e9a8;
-}
-
-.severity.info{
-    color:#79dfff;
-}
-
-.dashboard-grid{
-    display:grid;
-    grid-template-columns:1.2fr .8fr;
-    gap:18px;
-}
-
-.kpi-grid{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:12px;
-}
-
-.kpi{
-    padding:20px;
-}
-
-.kpi strong{
-    font-size:28px;
-    display:block;
-}
-
-.kpi span{
-    font-size:12px;
-    color:var(--muted);
+    border-color:
+        rgba(255,80,105,.2);
 }
 
 .chat{
     display:flex;
     flex-direction:column;
-    min-height:520px;
+
+    min-height:540px;
 }
 
-.chat-box{
+.chatbox{
     flex:1;
+
+    max-height:520px;
+
     overflow:auto;
-    padding:20px;
+
+    padding:18px;
+
     display:flex;
     flex-direction:column;
-    gap:12px;
-    max-height:520px;
+
+    gap:10px;
 }
 
 .msg{
-    max-width:80%;
-    padding:11px 13px;
-    border-radius:15px;
-    border:1px solid var(--border);
+    max-width:82%;
+
+    padding:
+        11px 13px;
+
+    border:
+        1px solid var(--border);
+
+    border-radius:14px;
+
     background:#0a0f16;
 }
 
 .msg.admin{
     align-self:flex-end;
-    background:rgba(109,124,255,.12);
-    border-color:rgba(109,124,255,.2);
+
+    background:
+        rgba(109,124,255,.12);
+
+    border-color:
+        rgba(109,124,255,.22);
 }
 
 .msg.client{
     align-self:flex-start;
 }
 
-.msg .who{
+.who{
+    margin-bottom:5px;
+
+    color:var(--muted);
+
     font-size:10px;
     font-weight:900;
-    color:var(--muted);
-    text-transform:uppercase;
+
     letter-spacing:.8px;
-    margin-bottom:5px;
+
+    text-transform:uppercase;
 }
 
-.msg .time{
+.time{
     margin-top:6px;
-    color:#66748a;
+
+    color:#69788d;
+
     font-size:10px;
 }
 
-.chat-form{
+.chatform{
     display:flex;
-    gap:10px;
-    padding:15px;
-    border-top:1px solid var(--border);
+
+    gap:9px;
+
+    padding:13px;
+
+    border-top:
+        1px solid var(--border);
 }
 
-.chat-form input{
+.chatform input{
     flex:1;
 }
 
 .finding{
-    padding:22px;
-    margin-bottom:14px;
-}
-
-.finding-header{
-    display:flex;
-    justify-content:space-between;
-    align-items:flex-start;
-    gap:15px;
+    padding:20px;
+    margin-bottom:12px;
 }
 
 .finding h3{
-    margin:0 0 8px;
+    margin:4px 0 8px;
 }
 
-.report-head{
+.sev{
+    font-weight:900;
+}
+
+.sev.critical{
+    color:#ff6176;
+}
+
+.sev.high{
+    color:#ff8d67;
+}
+
+.sev.medium{
+    color:#ffd36d;
+}
+
+.sev.low{
+    color:#5fe6a4;
+}
+
+.sev.info{
+    color:#77ddff;
+}
+
+.head{
     display:flex;
-    align-items:flex-start;
+
     justify-content:space-between;
+
+    align-items:flex-start;
+
     gap:15px;
-    margin-bottom:22px;
+
+    margin-bottom:20px;
 }
 
-.code-box{
-    background:#05070a;
-    border:1px solid var(--border);
-    border-radius:13px;
-    padding:14px;
-    overflow:auto;
-    font-family:
-        ui-monospace,
-        SFMono-Regular,
-        Menlo,
-        monospace;
-    font-size:12px;
-    color:#b8c6da;
+.empty{
+    text-align:center;
+
+    padding:30px;
+
+    color:var(--muted);
 }
 
 .footer{
-    padding:55px 0;
-    color:#66748a;
-    text-align:center;
+    padding:52px 0;
+
+    color:#66768d;
+
     font-size:12px;
+
+    text-align:center;
 }
 
 .login{
     width:min(480px,92%);
-    margin:90px auto;
+    margin:82px auto;
 }
 
-.login-panel{
-    padding:30px;
-}
-
-.empty{
-    padding:35px;
-    text-align:center;
-    color:var(--muted);
-}
-
-.actions{
-    display:flex;
-    flex-wrap:wrap;
-    gap:9px;
+.login .panel{
+    padding:28px;
 }
 
 @media(max-width:900px){
 
     .hero-grid,
-    .dashboard-grid{
+    .two{
         grid-template-columns:1fr;
     }
 
@@ -1005,51 +880,285 @@ td{
         grid-template-columns:1fr;
     }
 
-    .kpi-grid{
-        grid-template-columns:repeat(2,1fr);
-    }
-
-    .hero h1{
-        letter-spacing:-2px;
+    .kpis{
+        grid-template-columns:
+            repeat(2,1fr);
     }
 }
 
 @media(max-width:650px){
 
-    .navlinks{
+    .links{
         display:none;
     }
 
-    .form-grid{
+    .grid{
         grid-template-columns:1fr;
     }
 
-    .field.full{
+    .full{
         grid-column:auto;
     }
 
-    .kpi-grid{
-        grid-template-columns:1fr 1fr;
-    }
-
-    .hero{
-        padding-top:55px;
-    }
-
-    .stats-grid{
+    .stats{
         grid-template-columns:1fr;
+    }
+
+    .hero h1{
+        letter-spacing:-2px;
+    }
+
+    .kpis{
+        grid-template-columns:
+            1fr 1fr;
     }
 }
 """
 
 
 # ============================================================
-# PAGE TEMPLATE
+# HELPERS
 # ============================================================
 
-def page(title, body, script=""):
+def esc(value):
+    return html.escape(
+        str(value or ""),
+        quote=True
+    )
 
-    return f"""<!doctype html>
+
+def now():
+    return datetime.utcnow().strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+
+
+def db():
+    connection = sqlite3.connect(
+        DB_FILE,
+        timeout=20
+    )
+
+    connection.row_factory = sqlite3.Row
+
+    return connection
+
+
+def init_db():
+    connection = db()
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS requests(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_token TEXT UNIQUE,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            web_name TEXT,
+            target TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            client_ip TEXT
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS messages(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            sender TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS findings(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            description TEXT NOT NULL,
+            evidence TEXT NOT NULL,
+            recommendation TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(requests)"
+        ).fetchall()
+    }
+
+    if "client_token" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE requests
+            ADD COLUMN client_token TEXT
+            """
+        )
+
+    if "web_name" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE requests
+            ADD COLUMN web_name TEXT
+            """
+        )
+
+    rows = connection.execute(
+        """
+        SELECT id, client_token, web_name
+        FROM requests
+        """
+    ).fetchall()
+
+    for row in rows:
+
+        token = (
+            row["client_token"]
+            or secrets.token_urlsafe(32)
+        )
+
+        web_name = (
+            row["web_name"]
+            or "Unnamed Website"
+        )
+
+        connection.execute(
+            """
+            UPDATE requests
+            SET client_token=?,
+                web_name=?
+            WHERE id=?
+            """,
+            (
+                token,
+                web_name,
+                row["id"]
+            )
+        )
+
+    connection.commit()
+    connection.close()
+
+
+def get_request(request_id):
+
+    connection = db()
+
+    row = connection.execute(
+        """
+        SELECT *
+        FROM requests
+        WHERE id=?
+        """,
+        (request_id,)
+    ).fetchone()
+
+    connection.close()
+
+    return row
+
+
+def client_authorized(
+    request_id,
+    token
+):
+
+    if not token:
+        return False
+
+    connection = db()
+
+    row = connection.execute(
+        """
+        SELECT id
+        FROM requests
+        WHERE id=?
+        AND client_token=?
+        """,
+        (
+            request_id,
+            token
+        )
+    ).fetchone()
+
+    connection.close()
+
+    return row is not None
+
+
+def admin_required(function):
+
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+
+        if not session.get(
+            "admin_logged_in"
+        ):
+            return redirect(
+                url_for(
+                    "admin_login"
+                )
+            )
+
+        return function(
+            *args,
+            **kwargs
+        )
+
+    return wrapper
+
+
+def valid_target(target):
+
+    try:
+
+        parsed = urlparse(
+            target.strip()
+        )
+
+        return (
+            parsed.scheme
+            in (
+                "http",
+                "https"
+            )
+            and bool(
+                parsed.netloc
+            )
+        )
+
+    except Exception:
+        return False
+
+
+def severity_class(value):
+
+    return {
+        "CRITICAL": "critical",
+        "HIGH": "high",
+        "MEDIUM": "medium",
+        "LOW": "low"
+    }.get(
+        (value or "").upper(),
+        "info"
+    )
+
+
+def page(
+    title,
+    body,
+    script=""
+):
+
+    return f"""
+<!doctype html>
+
 <html lang="en">
 
 <head>
@@ -1062,32 +1171,27 @@ def page(title, body, script=""):
 >
 
 <title>
-    {esc(title)} —
-    {APP_NAME}
+    {esc(title)} — {APP_NAME}
 </title>
 
 <style>
-{BASE_CSS}
+{CSS}
 </style>
-
-<script
-    src="https://cdn.socket.io/4.8.1/socket.io.min.js"
-></script>
 
 </head>
 
 <body>
 
-<div class="topbar">
+<div class="top">
 
-    <div class="container nav">
+    <div class="wrap nav">
 
         <a
             class="brand"
-            href="{url_for('home')}"
+            href="/"
         >
 
-            <div class="brand-mark">
+            <div class="logo">
                 M
             </div>
 
@@ -1103,17 +1207,18 @@ def page(title, body, script=""):
 
         </a>
 
-        <div class="navlinks">
 
-            <a href="{url_for('home')}">
+        <div class="links">
+
+            <a href="/">
                 Home
             </a>
 
-            <a href="{url_for('new_request')}">
+            <a href="/request">
                 Request
             </a>
 
-            <a href="{url_for('admin_login')}">
+            <a href="/admin/login">
                 Admin
             </a>
 
@@ -1123,55 +1228,151 @@ def page(title, body, script=""):
 
 </div>
 
+
 <main>
+
 {body}
+
 </main>
+
 
 <div class="footer">
 
     MATIA // SECURITY CHECK
-
     ·
-
     Authorized Security Assessment Portal
 
 </div>
 
+
 <script>
+
 {script}
+
 </script>
 
 </body>
+
 </html>
 """
 
 
-# ============================================================
-# SOCKET.IO
-# ============================================================
+def render_messages(rows):
 
-@socketio.on("join_request")
-def join_request(data):
+    if not rows:
 
-    try:
-        request_id = int(
-            data.get("request_id")
+        return """
+        <div class="empty">
+            No messages yet.
+        </div>
+        """
+
+    output = []
+
+    for row in rows:
+
+        role = (
+            "admin"
+            if row["sender"] == "admin"
+            else "client"
         )
-    except Exception:
-        return
 
-    join_room(
-        f"request_{request_id}"
-    )
+        output.append(
+            f"""
+            <div class="msg {role}">
+
+                <div class="who">
+                    {esc(row["sender"])}
+                </div>
+
+                <div>
+                    {esc(row["message"])}
+                </div>
+
+                <div class="time">
+                    {esc(row["created_at"])}
+                </div>
+
+            </div>
+            """
+        )
+
+    return "".join(output)
 
 
-@socketio.on("join_admin")
-def join_admin():
+def render_findings(rows):
 
-    if session.get(
-        "admin_logged_in"
-    ):
-        join_room("admin")
+    if not rows:
+
+        return """
+        <div class="panel empty">
+            No findings published yet.
+        </div>
+        """
+
+    output = []
+
+    for row in rows:
+
+        severity = severity_class(
+            row["severity"]
+        )
+
+        output.append(
+            f"""
+            <div class="panel finding">
+
+                <div class="sev {severity}">
+                    {esc(row["severity"])}
+                </div>
+
+                <h3>
+                    {esc(row["title"])}
+                </h3>
+
+                <p class="muted">
+
+                    <b>
+                        Description
+                    </b>
+
+                    <br>
+
+                    {esc(row["description"])}
+
+                </p>
+
+
+                <p class="muted">
+
+                    <b>
+                        Evidence
+                    </b>
+
+                    <br>
+
+                    {esc(row["evidence"])}
+
+                </p>
+
+
+                <p class="muted">
+
+                    <b>
+                        Recommendation
+                    </b>
+
+                    <br>
+
+                    {esc(row["recommendation"])}
+
+                </p>
+
+            </div>
+            """
+        )
+
+    return "".join(output)
 
 
 # ============================================================
@@ -1184,11 +1385,11 @@ def home():
     body = """
 <section class="hero">
 
-    <div class="container hero-grid">
+    <div class="wrap hero-grid">
 
         <div>
 
-            <div class="status-line">
+            <div class="status">
 
                 <span class="dot"></span>
 
@@ -1196,42 +1397,43 @@ def home():
 
             </div>
 
+
             <h1>
 
                 Find the weak points
 
-                <span class="gradient-text">
+                <span class="grad">
                     before attackers do.
                 </span>
 
             </h1>
 
-            <p>
 
-                MATIA // SECURITY CHECK is an authorized
-                security assessment portal for website
-                owners and authorized testers.
+            <p class="muted">
 
-                Submit your website, define the scope,
-                and communicate directly through the
-                assessment portal.
+                MATIA // SECURITY CHECK is a
+                modern portal for authorized
+                website security assessments,
+                client communication and
+                structured reporting.
 
             </p>
 
+
             <div
                 class="actions"
-                style="margin-top:25px"
+                style="margin-top:22px"
             >
 
                 <a
-                    class="btn btn-primary"
+                    class="btn primary"
                     href="/request"
                 >
                     Start Security Check →
                 </a>
 
                 <a
-                    class="btn btn-dark"
+                    class="btn dark"
                     href="#how"
                 >
                     How it works
@@ -1239,7 +1441,8 @@ def home():
 
             </div>
 
-            <div class="stats-grid">
+
+            <div class="stats">
 
                 <div class="stat">
 
@@ -1253,6 +1456,7 @@ def home():
 
                 </div>
 
+
                 <div class="stat">
 
                     <strong>
@@ -1264,6 +1468,7 @@ def home():
                     </span>
 
                 </div>
+
 
                 <div class="stat">
 
@@ -1281,9 +1486,10 @@ def home():
 
         </div>
 
-        <div class="panel hero-card">
 
-            <div class="status-line">
+        <div class="panel card">
+
+            <div class="status">
 
                 <span class="dot"></span>
 
@@ -1291,48 +1497,36 @@ def home():
 
             </div>
 
-            <h2 style="margin-top:0">
-                Security Assessment Console
+
+            <h2>
+                Security Operations Portal
             </h2>
+
 
             <p class="muted">
 
-                Live request tracking,
-                direct messaging,
-                vulnerability findings
-                and final reporting.
+                Private client portals,
+                admin controls, live polling,
+                findings and reports.
 
             </p>
 
-            <div style="margin-top:25px">
 
-                <div class="code-box">
+            <div class="code">
 
-                    TARGET
-                    →
-                    HTTPS WEBSITE
-                    <br>
+                AUTHORIZATION → REQUIRED
+                <br>
 
-                    AUTHORIZATION
-                    →
-                    REQUIRED
-                    <br>
+                SCOPE → CLIENT DEFINED
+                <br>
 
-                    SCOPE
-                    →
-                    CLIENT DEFINED
-                    <br>
+                SCANNING → MANUAL / AUTHORIZED
+                <br>
 
-                    SCANNING
-                    →
-                    MANUAL / AUTHORIZED
-                    <br>
+                REPORT → PRIVATE PORTAL
+                <br>
 
-                    REPORT
-                    →
-                    LIVE PORTAL
-
-                </div>
+                ENGINE → FLASK + GUNICORN
 
             </div>
 
@@ -1348,18 +1542,16 @@ def home():
     class="section"
 >
 
-    <div class="container">
+    <div class="wrap">
 
-        <h2 class="section-title">
+        <h2 class="title">
             How it works
         </h2>
 
-        <p class="section-sub">
-
-            A simple workflow for authorized
-            website security reviews.
-
+        <p class="sub">
+            From request to final report.
         </p>
+
 
         <div class="cards">
 
@@ -1371,13 +1563,14 @@ def home():
 
                 <p class="muted">
 
-                    Enter your name, email,
+                    Enter name, email,
                     web name, target and
                     authorized scope.
 
                 </p>
 
             </div>
+
 
             <div class="panel card">
 
@@ -1388,13 +1581,12 @@ def home():
                 <p class="muted">
 
                     The request appears in
-                    the private admin console
-                    for assessment and
-                    communication.
+                    the private admin console.
 
                 </p>
 
             </div>
+
 
             <div class="panel card">
 
@@ -1404,10 +1596,9 @@ def home():
 
                 <p class="muted">
 
-                    Findings, severity,
-                    evidence and recommendations
-                    become available in the
-                    private report portal.
+                    Publish findings with
+                    severity, evidence and
+                    recommendations.
 
                 </p>
 
@@ -1427,7 +1618,7 @@ def home():
 
 
 # ============================================================
-# NEW REQUEST
+# REQUEST FORM
 # ============================================================
 
 @app.route(
@@ -1470,56 +1661,58 @@ def new_request():
         )
 
         if not name:
-            error = "Please enter your name."
 
-        elif (
-            not email
-            or "@" not in email
-        ):
-            error = "Please enter a valid email."
+            error = (
+                "Name is required."
+            )
+
+        elif "@" not in email:
+
+            error = (
+                "Valid email is required."
+            )
 
         elif not web_name:
-            error = "Please enter the website name."
+
+            error = (
+                "Web Name is required."
+            )
 
         elif not valid_target(
             target
         ):
+
             error = (
-                "Target must be a valid "
+                "Web Target must be a valid "
                 "HTTP or HTTPS URL."
             )
 
         elif not scope:
+
             error = (
-                "Please define the "
-                "authorized scope."
+                "Authorized Scope is required."
             )
 
         elif not authorization:
+
             error = (
-                "You must confirm that "
-                "you are authorized to "
-                "request testing."
+                "Authorization confirmation "
+                "is required."
             )
 
         else:
 
-            client_token = (
-                secrets.token_urlsafe(32)
+            token = secrets.token_urlsafe(
+                32
             )
 
-            created = now()
-
-            client_ip = request.headers.get(
-                "X-Forwarded-For",
-                request.remote_addr or ""
-            )
+            timestamp = now()
 
             connection = db()
 
             cursor = connection.execute(
                 """
-                INSERT INTO requests (
+                INSERT INTO requests(
                     client_token,
                     name,
                     email,
@@ -1531,19 +1724,33 @@ def new_request():
                     updated_at,
                     client_ip
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?
+                )
                 """,
                 (
-                    client_token,
+                    token,
                     name,
                     email,
                     web_name,
                     target,
                     scope,
                     "PENDING",
-                    created,
-                    created,
-                    client_ip,
+                    timestamp,
+                    timestamp,
+                    request.headers.get(
+                        "X-Forwarded-For",
+                        request.remote_addr or ""
+                    )
                 )
             )
 
@@ -1552,61 +1759,24 @@ def new_request():
             connection.commit()
             connection.close()
 
-            resolved_ip = resolve_target(
-                target
-            )
-
-            if resolved_ip:
-
-                print(
-                    "[MATIA SECURITY CHECK] "
-                    f"{target} -> {resolved_ip}"
-                )
-
-            else:
-
-                print(
-                    "[MATIA SECURITY CHECK] "
-                    f"DNS resolution failed: {target}"
-                )
-
-            socketio.emit(
-                "request_new",
-                {
-                    "id": request_id,
-                    "name": name,
-                    "web_name": web_name,
-                    "target": target,
-                },
-                room="admin"
-            )
-
             return redirect(
                 url_for(
                     "client_status",
                     request_id=request_id,
-                    token=client_token
+                    token=token
                 )
             )
-
-    error_html = ""
-
-    if error:
-
-        error_html = f"""
-        <div class="notice error">
-            {esc(error)}
-        </div>
-        """
 
     body = f"""
 <section class="section">
 
-    <div class="container form-wrap">
+    <div class="wrap form">
 
-        <div style="margin-bottom:25px">
+        <div
+            style="margin-bottom:22px"
+        >
 
-            <div class="status-line">
+            <div class="status">
 
                 <span class="dot"></span>
 
@@ -1614,33 +1784,44 @@ def new_request():
 
             </div>
 
+
             <h1
-                class="section-title"
+                class="title"
                 style="font-size:42px"
             >
                 Start an authorized assessment
             </h1>
 
-            <p class="section-sub">
 
-                Tell us what website you want reviewed
-                and exactly what is inside the
-                authorized scope.
+            <p class="sub">
+
+                Enter the website information
+                and define the exact scope.
 
             </p>
 
         </div>
 
-        <div class="panel form-panel">
 
-            {error_html}
+        <div class="panel card">
+
+            {
+                f'''
+                <div class="notice error">
+                    {esc(error)}
+                </div>
+                '''
+                if error
+                else ""
+            }
+
 
             <form
                 method="POST"
                 action="/request"
             >
 
-                <div class="form-grid">
+                <div class="grid">
 
                     <div class="field">
 
@@ -1658,6 +1839,7 @@ def new_request():
 
                     </div>
 
+
                     <div class="field">
 
                         <label>
@@ -1674,6 +1856,7 @@ def new_request():
 
                     </div>
 
+
                     <div class="field">
 
                         <label>
@@ -1688,6 +1871,7 @@ def new_request():
                         >
 
                     </div>
+
 
                     <div class="field">
 
@@ -1704,6 +1888,7 @@ def new_request():
 
                     </div>
 
+
                     <div class="field full">
 
                         <label>
@@ -1712,15 +1897,16 @@ def new_request():
 
                         <textarea
                             name="scope"
-                            placeholder="Example: public website only. No destructive testing."
+                            placeholder="Example: public website only. No destructive testing or third-party systems."
                             required
                         ></textarea>
 
                     </div>
 
+
                     <div class="field full">
 
-                        <label class="checkbox">
+                        <label class="check">
 
                             <input
                                 type="checkbox"
@@ -1733,8 +1919,8 @@ def new_request():
                                 I confirm that I own
                                 this website or have
                                 explicit authorization
-                                from the owner to request
-                                this security assessment.
+                                to request this
+                                security assessment.
 
                             </span>
 
@@ -1742,10 +1928,11 @@ def new_request():
 
                     </div>
 
+
                     <div class="field full">
 
                         <button
-                            class="btn btn-primary"
+                            class="btn primary"
                             type="submit"
                         >
                             SEND SECURITY REQUEST →
@@ -1771,7 +1958,7 @@ def new_request():
 
 
 # ============================================================
-# CLIENT STATUS / PORTAL
+# CLIENT PORTAL
 # ============================================================
 
 @app.route(
@@ -1794,16 +1981,13 @@ def client_status(request_id):
         request_id
     )
 
-    if not item:
-        abort(404)
-
     connection = db()
 
     messages = connection.execute(
         """
         SELECT *
         FROM messages
-        WHERE request_id = ?
+        WHERE request_id=?
         ORDER BY id ASC
         """,
         (request_id,)
@@ -1813,7 +1997,7 @@ def client_status(request_id):
         """
         SELECT *
         FROM findings
-        WHERE request_id = ?
+        WHERE request_id=?
         ORDER BY id DESC
         """,
         (request_id,)
@@ -1821,334 +2005,16 @@ def client_status(request_id):
 
     connection.close()
 
-    message_html = ""
-
-    for message in messages:
-
-        sender_class = (
-            "admin"
-            if message["sender"] == "admin"
-            else "client"
-        )
-
-        message_html += f"""
-        <div class="msg {sender_class}">
-
-            <div class="who">
-                {esc(message["sender"])}
-            </div>
-
-            <div>
-                {esc(message["message"])}
-            </div>
-
-            <div class="time">
-                {esc(message["created_at"])}
-            </div>
-
-        </div>
-        """
-
-    if not message_html:
-
-        message_html = """
-        <div class="empty">
-
-            No messages yet.
-            Your security analyst can reply here.
-
-        </div>
-        """
-
-    findings_html = ""
-
-    if findings:
-
-        for finding in findings:
-
-            sev = severity_class(
-                finding["severity"]
-            )
-
-            findings_html += f"""
-            <div class="panel finding">
-
-                <div class="finding-header">
-
-                    <div>
-
-                        <div
-                            class="severity {sev}"
-                        >
-                            {esc(finding["severity"])}
-                        </div>
-
-                        <h3>
-                            {esc(finding["title"])}
-                        </h3>
-
-                    </div>
-
-                    <span class="muted">
-                        #{finding["id"]}
-                    </span>
-
-                </div>
-
-                <p class="muted">
-
-                    <strong>
-                        Description
-                    </strong>
-
-                    <br>
-
-                    {esc(finding["description"])}
-
-                </p>
-
-                <p class="muted">
-
-                    <strong>
-                        Evidence
-                    </strong>
-
-                    <br>
-
-                    {esc(finding["evidence"])}
-
-                </p>
-
-                <p class="muted">
-
-                    <strong>
-                        Recommendation
-                    </strong>
-
-                    <br>
-
-                    {esc(finding["recommendation"])}
-
-                </p>
-
-            </div>
-            """
-
-    else:
-
-        findings_html = """
-        <div class="panel empty">
-
-            No findings have been
-            published yet.
-
-        </div>
-        """
-
-    script = f"""
-const socket = io();
-
-socket.on("connect", () => {{
-
-    socket.emit(
-        "join_request",
-        {{
-            request_id: {request_id}
-        }}
-    );
-
-}});
-
-
-socket.on(
-    "new_message",
-    (data) => {{
-
-        if (
-            data.request_id !==
-            {request_id}
-        ) {{
-            return;
-        }}
-
-        const box =
-            document.getElementById(
-                "chat-box"
-            );
-
-        box.insertAdjacentHTML(
-            "beforeend",
-            `
-            <div class="msg admin">
-
-                <div class="who">
-                    ${{escapeHtml(
-                        data.sender
-                    )}}
-                </div>
-
-                <div>
-                    ${{escapeHtml(
-                        data.message
-                    )}}
-                </div>
-
-                <div class="time">
-                    ${{escapeHtml(
-                        data.created_at
-                    )}}
-                </div>
-
-            </div>
-            `
-        );
-
-        box.scrollTop =
-            box.scrollHeight;
-
-        if (
-            "Notification" in window &&
-            Notification.permission ===
-            "granted"
-        ) {{
-
-            new Notification(
-                "MATIA // SECURITY CHECK",
-                {{
-                    body:
-                        "New message from your security analyst."
-                }}
-            );
-
-        }}
-
-    }}
-);
-
-
-socket.on(
-    "finding_new",
-    (data) => {{
-
-        if (
-            data.request_id !==
-            {request_id}
-        ) {{
-            return;
-        }}
-
-        if (
-            "Notification" in window &&
-            Notification.permission ===
-            "granted"
-        ) {{
-
-            new Notification(
-                "New Security Finding",
-                {{
-                    body:
-                        data.title +
-                        " · " +
-                        data.severity
-                }}
-            );
-
-        }}
-
-        location.reload();
-
-    }}
-);
-
-
-socket.on(
-    "report_ready",
-    (data) => {{
-
-        if (
-            data.request_id !==
-            {request_id}
-        ) {{
-            return;
-        }}
-
-        location.reload();
-
-    }}
-);
-
-
-function escapeHtml(str) {{
-
-    return String(str)
-
-        .replaceAll(
-            "&",
-            "&amp;"
-        )
-
-        .replaceAll(
-            "<",
-            "&lt;"
-        )
-
-        .replaceAll(
-            ">",
-            "&gt;"
-        )
-
-        .replaceAll(
-            '"',
-            "&quot;"
-        )
-
-        .replaceAll(
-            "'",
-            "&#039;"
-        );
-
-}}
-
-
-async function requestNotifications() {{
-
-    if (
-        "Notification" in window
-    ) {{
-
-        try {{
-
-            await Notification.requestPermission();
-
-        }} catch (e) {{}}
-
-    }}
-
-}}
-
-
-requestNotifications();
-"""
-
-    status_class = (
-        item["status"]
-        .lower()
-    )
-
-    resolved_ip = resolve_target(
-        item["target"]
-    ) or "N/A"
-
     body = f"""
 <section class="section">
 
-    <div class="container">
+    <div class="wrap">
 
-        <div class="report-head">
+        <div class="head">
 
             <div>
 
-                <div class="status-line">
+                <div class="status">
 
                     <span class="dot"></span>
 
@@ -2156,37 +2022,39 @@ requestNotifications();
 
                 </div>
 
-                <h1 class="section-title">
+
+                <h1 class="title">
                     {esc(item["web_name"])}
                 </h1>
 
+
                 <p class="muted">
+
                     Request #{item["id"]}
                     ·
                     {esc(item["target"])}
+
                 </p>
 
             </div>
 
-            <div>
 
-                <span
-                    class="badge {status_class}"
-                >
-                    {esc(item["status"])}
-                </span>
-
-            </div>
+            <span
+                class="badge
+                {item["status"].lower()}"
+            >
+                {esc(item["status"])}
+            </span>
 
         </div>
 
 
         <div
-            class="kpi-grid"
+            class="kpis"
             style="margin-bottom:18px"
         >
 
-            <div class="panel kpi">
+            <div class="kpi panel">
 
                 <strong>
                     #{item["id"]}
@@ -2198,38 +2066,41 @@ requestNotifications();
 
             </div>
 
-            <div class="panel kpi">
+
+            <div class="kpi panel">
 
                 <strong>
                     {len(findings)}
                 </strong>
 
                 <span>
-                    Published findings
+                    Findings
                 </span>
 
             </div>
 
-            <div class="panel kpi">
+
+            <div class="kpi panel">
 
                 <strong>
-                    {esc(resolved_ip)}
+                    PRIVATE
                 </strong>
 
                 <span>
-                    Resolved IP
+                    Client portal
                 </span>
 
             </div>
 
-            <div class="panel kpi">
+
+            <div class="kpi panel">
 
                 <strong>
                     LIVE
                 </strong>
 
                 <span>
-                    Portal connection
+                    Auto update
                 </span>
 
             </div>
@@ -2237,7 +2108,7 @@ requestNotifications();
         </div>
 
 
-        <div class="dashboard-grid">
+        <div class="two">
 
             <div>
 
@@ -2247,54 +2118,59 @@ requestNotifications();
                 >
 
                     <h3>
-                        Assessment details
+                        Assessment Details
                     </h3>
+
 
                     <p class="muted">
 
-                        <strong>
+                        <b>
                             Name:
-                        </strong>
+                        </b>
 
                         {esc(item["name"])}
 
                     </p>
 
+
                     <p class="muted">
 
-                        <strong>
+                        <b>
                             Email:
-                        </strong>
+                        </b>
 
                         {esc(item["email"])}
 
                     </p>
 
+
                     <p class="muted">
 
-                        <strong>
+                        <b>
                             Web Name:
-                        </strong>
+                        </b>
 
                         {esc(item["web_name"])}
 
                     </p>
 
+
                     <p class="muted">
 
-                        <strong>
+                        <b>
                             Target:
-                        </strong>
+                        </b>
 
                         {esc(item["target"])}
 
                     </p>
 
+
                     <p class="muted">
 
-                        <strong>
+                        <b>
                             Scope:
-                        </strong>
+                        </b>
 
                         <br>
 
@@ -2302,27 +2178,25 @@ requestNotifications();
 
                     </p>
 
-                    <div style="margin-top:15px">
 
-                        <a
-                            class="btn btn-dark"
-                            href="/report/{request_id}?token={esc(token)}"
-                        >
-                            View Full Report →
-                        </a>
-
-                    </div>
+                    <a
+                        class="btn dark"
+                        href="/report/{request_id}?token={esc(token)}"
+                    >
+                        View Full Report →
+                    </a>
 
                 </div>
 
 
-                <div>
+                <h2 class="title">
+                    Security Findings
+                </h2>
 
-                    <h2 class="section-title">
-                        Security Findings
-                    </h2>
 
-                    {findings_html}
+                <div id="findings">
+
+                    {render_findings(findings)}
 
                 </div>
 
@@ -2331,37 +2205,33 @@ requestNotifications();
 
             <div class="panel chat">
 
-                <div
-                    style="
-                    padding:20px;
-                    border-bottom:1px solid var(--border)
-                    "
-                >
+                <div class="card">
 
                     <h3 style="margin:0">
                         Live Analyst Chat
                     </h3>
 
-                    <p
-                        class="muted"
-                        style="margin:7px 0 0"
-                    >
-                        Messages appear instantly.
+                    <p class="muted">
+
+                        Updates automatically.
+
                     </p>
 
                 </div>
 
 
                 <div
-                    class="chat-box"
-                    id="chat-box"
+                    class="chatbox"
+                    id="client-chat"
                 >
-                    {message_html}
+
+                    {render_messages(messages)}
+
                 </div>
 
 
                 <form
-                    class="chat-form"
+                    class="chatform"
                     method="POST"
                     action="/status/{request_id}/message?token={esc(token)}"
                 >
@@ -2374,7 +2244,8 @@ requestNotifications();
                     >
 
                     <button
-                        class="btn btn-primary"
+                        class="btn primary"
+                        type="submit"
                     >
                         Send
                     </button>
@@ -2390,10 +2261,120 @@ requestNotifications();
 </section>
 """
 
+    script = f"""
+async function checkClientUpdates(){{
+    try{{
+
+        const response = await fetch(
+            "/api/client/{request_id}?token={esc(token)}",
+            {{
+                cache:"no-store"
+            }}
+        );
+
+        if(!response.ok){{
+            return;
+        }}
+
+        const data = await response.json();
+
+        if(
+            data.updated_at !==
+            window.currentUpdated
+        ){{
+            location.reload();
+        }}
+
+    }}catch(error){{}}
+}}
+
+window.currentUpdated =
+    {repr(item["updated_at"])};
+
+setInterval(
+    checkClientUpdates,
+    2500
+);
+"""
+
     return page(
         f"Client Portal #{request_id}",
         body,
         script
+    )
+
+
+@app.route(
+    "/api/client/<int:request_id>"
+)
+def api_client(request_id):
+
+    token = request.args.get(
+        "token",
+        ""
+    )
+
+    if not client_authorized(
+        request_id,
+        token
+    ):
+        return jsonify(
+            {
+                "error":
+                "forbidden"
+            }
+        ), 403
+
+    item = get_request(
+        request_id
+    )
+
+    connection = db()
+
+    latest_message = connection.execute(
+        """
+        SELECT COALESCE(
+            MAX(id),
+            0
+        ) AS value
+
+        FROM messages
+
+        WHERE request_id=?
+        """,
+        (request_id,)
+    ).fetchone()["value"]
+
+    latest_finding = connection.execute(
+        """
+        SELECT COALESCE(
+            MAX(id),
+            0
+        ) AS value
+
+        FROM findings
+
+        WHERE request_id=?
+        """,
+        (request_id,)
+    ).fetchone()["value"]
+
+    connection.close()
+
+    return jsonify(
+        {
+            "updated_at":
+                item["updated_at"],
+
+            "status":
+                item["status"],
+
+            "latest_message":
+                latest_message,
+
+            "latest_finding":
+                latest_finding
+        }
     )
 
 
@@ -2419,61 +2400,49 @@ def client_message(request_id):
         ""
     ).strip()
 
-    if not message:
+    if message:
 
-        return redirect(
-            url_for(
-                "client_status",
-                request_id=request_id,
-                token=token
+        timestamp = now()
+
+        connection = db()
+
+        connection.execute(
+            """
+            INSERT INTO messages(
+                request_id,
+                sender,
+                message,
+                created_at
+            )
+            VALUES(
+                ?,
+                ?,
+                ?,
+                ?
+            )
+            """,
+            (
+                request_id,
+                "client",
+                message,
+                timestamp
             )
         )
 
-    created = now()
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO messages (
-            request_id,
-            sender,
-            message,
-            created_at
+        connection.execute(
+            """
+            UPDATE requests
+            SET updated_at=?
+            WHERE id=?
+            """,
+            (
+                timestamp,
+                request_id
+            )
         )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            request_id,
-            "client",
-            message,
-            created
-        )
-    )
 
-    connection.commit()
-    connection.close()
-
-    socketio.emit(
-        "new_message",
-        {
-            "request_id": request_id,
-            "sender": "client",
-            "message": message,
-            "created_at": created,
-        },
-        room=f"request_{request_id}"
-    )
-
-    socketio.emit(
-        "admin_message",
-        {
-            "request_id": request_id,
-            "message": message,
-            "created_at": created,
-        },
-        room="admin"
-    )
+        connection.commit()
+        connection.close()
 
     return redirect(
         url_for(
@@ -2509,13 +2478,26 @@ def admin_login():
         )
 
         if (
-            email == ADMIN_EMAIL
-            and password == ADMIN_PASSWORD
+            secrets.compare_digest(
+                email,
+                ADMIN_EMAIL
+            )
+            and
+            secrets.compare_digest(
+                password,
+                ADMIN_PASSWORD
+            )
         ):
+
+            session.clear()
 
             session[
                 "admin_logged_in"
             ] = True
+
+            session[
+                "admin_email"
+            ] = ADMIN_EMAIL
 
             return redirect(
                 url_for(
@@ -2527,20 +2509,10 @@ def admin_login():
             "Invalid admin credentials."
         )
 
-    error_html = ""
-
-    if error:
-
-        error_html = f"""
-        <div class="notice error">
-            {esc(error)}
-        </div>
-        """
-
     body = f"""
 <section class="login">
 
-    <div class="status-line">
+    <div class="status">
 
         <span class="dot"></span>
 
@@ -2549,20 +2521,37 @@ def admin_login():
     </div>
 
 
-    <div class="panel login-panel">
+    <div class="panel">
 
         <h1 style="margin-top:0">
             Admin Console
         </h1>
 
+
         <p class="muted">
-            MATIA // SECURITY CHECK
+
+            Authorized administrator only.
+
+            Your email is loaded automatically.
+
         </p>
 
-        {error_html}
+
+        {
+            f'''
+            <div class="notice error">
+                {esc(error)}
+            </div>
+            '''
+            if error
+            else ""
+        }
 
 
-        <form method="POST">
+        <form
+            method="POST"
+            autocomplete="on"
+        >
 
             <div
                 class="field"
@@ -2574,9 +2563,11 @@ def admin_login():
                 </label>
 
                 <input
-                    name="email"
                     type="email"
-                    placeholder="Admin email"
+                    name="email"
+                    value="{esc(ADMIN_EMAIL)}"
+                    autocomplete="username"
+                    readonly
                     required
                 >
 
@@ -2593,9 +2584,10 @@ def admin_login():
                 </label>
 
                 <input
-                    name="password"
                     type="password"
-                    placeholder="Admin password"
+                    name="password"
+                    autocomplete="current-password"
+                    placeholder="Your saved admin password"
                     required
                 >
 
@@ -2603,11 +2595,11 @@ def admin_login():
 
 
             <button
-                class="btn btn-primary"
+                class="btn primary"
                 type="submit"
                 style="width:100%"
             >
-                ENTER ADMIN CONSOLE
+                ENTER ADMIN CONSOLE →
             </button>
 
         </form>
@@ -2633,7 +2625,7 @@ def admin_dashboard():
 
     connection = db()
 
-    requests_list = connection.execute(
+    rows = connection.execute(
         """
         SELECT *
         FROM requests
@@ -2641,208 +2633,141 @@ def admin_dashboard():
         """
     ).fetchall()
 
-    total = connection.execute(
+    finding_count = connection.execute(
         """
-        SELECT COUNT(*) AS c
-        FROM requests
-        """
-    ).fetchone()["c"]
-
-    pending = connection.execute(
-        """
-        SELECT COUNT(*) AS c
-        FROM requests
-        WHERE status = 'PENDING'
-        """
-    ).fetchone()["c"]
-
-    progress = connection.execute(
-        """
-        SELECT COUNT(*) AS c
-        FROM requests
-        WHERE status = 'IN PROGRESS'
-        """
-    ).fetchone()["c"]
-
-    findings = connection.execute(
-        """
-        SELECT COUNT(*) AS c
+        SELECT COUNT(*) AS value
         FROM findings
         """
-    ).fetchone()["c"]
+    ).fetchone()["value"]
 
     connection.close()
 
-    rows = ""
+    pending = sum(
+        row["status"] == "PENDING"
+        for row in rows
+    )
 
-    for item in requests_list:
+    progress = sum(
+        row["status"] == "IN PROGRESS"
+        for row in rows
+    )
 
-        status = item["status"].lower()
+    table_rows = []
 
-        rows += f"""
-        <tr>
+    for row in rows:
 
-            <td>
-                #{item["id"]}
-            </td>
+        table_rows.append(
+            f"""
+            <tr>
 
-            <td>
+                <td>
+                    #{row["id"]}
+                </td>
 
-                <strong>
-                    {esc(item["web_name"])}
-                </strong>
 
-                <br>
+                <td>
 
-                <span class="muted">
-                    {esc(item["name"])}
-                </span>
+                    <b>
+                        {esc(row["web_name"])}
+                    </b>
 
-            </td>
+                    <br>
 
-            <td>
-                {esc(item["email"])}
-            </td>
+                    <span class="muted">
+                        {esc(row["name"])}
+                    </span>
 
-            <td
-                style="
-                max-width:280px;
-                overflow:hidden;
-                text-overflow:ellipsis
-                "
-            >
-                {esc(item["target"])}
-            </td>
+                </td>
 
-            <td>
 
-                <span
-                    class="badge {status}"
-                >
-                    {esc(item["status"])}
-                </span>
+                <td>
+                    {esc(row["email"])}
+                </td>
 
-            </td>
 
-            <td>
+                <td>
+                    {esc(row["target"])}
+                </td>
 
-                <a
-                    class="btn btn-dark"
-                    href="/admin/request/{item["id"]}"
-                >
-                    Open
-                </a>
 
-            </td>
+                <td>
 
-        </tr>
-        """
+                    <span
+                        class="badge
+                        {row["status"].lower()}"
+                    >
+                        {esc(row["status"])}
+                    </span>
 
-    if not rows:
+                </td>
 
-        rows = """
-        <tr>
 
-            <td colspan="6">
+                <td>
 
-                <div class="empty">
-                    No requests yet.
-                </div>
+                    <a
+                        class="btn dark"
+                        href="/admin/request/{row["id"]}"
+                    >
+                        Open
+                    </a>
 
-            </td>
+                </td>
 
-        </tr>
-        """
+            </tr>
+            """
+        )
 
     script = """
-const socket = io();
+async function refreshAdmin(){
 
-socket.on("connect", () => {
+    try{
 
-    socket.emit("join_admin");
+        const response = await fetch(
+            "/api/admin/requests",
+            {
+                cache:"no-store"
+            }
+        );
 
-});
-
-socket.on(
-    "request_new",
-    (data) => {
-
-        if (
-            "Notification" in window &&
-            Notification.permission ===
-            "granted"
-        ) {
-
-            new Notification(
-                "New Security Request",
-                {
-                    body:
-                        data.web_name +
-                        " · " +
-                        data.target
-                }
-            );
-
+        if(!response.ok){
+            return;
         }
 
-        location.reload();
+        const data =
+            await response.json();
 
-    }
-);
-
-socket.on(
-    "admin_message",
-    (data) => {
-
-        if (
-            "Notification" in window &&
-            Notification.permission ===
-            "granted"
-        ) {
-
-            new Notification(
-                "New Client Message",
-                {
-                    body:
-                        "Request #" +
-                        data.request_id
-                }
-            );
-
+        if(
+            data.count !==
+            window.currentRequestCount
+        ){
+            location.reload();
         }
 
-    }
-);
-
-if (
-    "Notification" in window &&
-    Notification.permission ===
-    "default"
-) {
-
-    Notification.requestPermission();
-
+    }catch(error){}
 }
-"""
+
+window.currentRequestCount =
+    __REQUEST_COUNT__;
+
+setInterval(
+    refreshAdmin,
+    3000
+);
+""".replace(
+        "__REQUEST_COUNT__",
+        str(len(rows))
+    )
 
     body = f"""
 <section class="section">
 
-    <div class="container">
+    <div class="wrap">
 
-        <div
-            style="
-            display:flex;
-            justify-content:space-between;
-            align-items:flex-start;
-            gap:20px;
-            margin-bottom:25px
-            "
-        >
+        <div class="head">
 
             <div>
 
-                <div class="status-line">
+                <div class="status">
 
                     <span class="dot"></span>
 
@@ -2850,18 +2775,16 @@ if (
 
                 </div>
 
-                <h1
-                    class="section-title"
-                    style="font-size:42px"
-                >
+
+                <h1 class="title">
                     Security Operations
                 </h1>
 
-                <p class="section-sub">
 
-                    Manage authorized requests,
-                    communicate with clients
-                    and publish findings.
+                <p class="sub">
+
+                    Requests, private chats,
+                    statuses and findings.
 
                 </p>
 
@@ -2869,7 +2792,7 @@ if (
 
 
             <a
-                class="btn btn-red"
+                class="btn red"
                 href="/admin/logout"
             >
                 Logout
@@ -2879,14 +2802,14 @@ if (
 
 
         <div
-            class="kpi-grid"
-            style="margin-bottom:20px"
+            class="kpis"
+            style="margin-bottom:18px"
         >
 
-            <div class="panel kpi">
+            <div class="kpi panel">
 
                 <strong>
-                    {total}
+                    {len(rows)}
                 </strong>
 
                 <span>
@@ -2896,7 +2819,7 @@ if (
             </div>
 
 
-            <div class="panel kpi">
+            <div class="kpi panel">
 
                 <strong>
                     {pending}
@@ -2909,7 +2832,7 @@ if (
             </div>
 
 
-            <div class="panel kpi">
+            <div class="kpi panel">
 
                 <strong>
                     {progress}
@@ -2922,14 +2845,14 @@ if (
             </div>
 
 
-            <div class="panel kpi">
+            <div class="kpi panel">
 
                 <strong>
-                    {findings}
+                    {finding_count}
                 </strong>
 
                 <span>
-                    Total findings
+                    Findings
                 </span>
 
             </div>
@@ -2937,62 +2860,49 @@ if (
         </div>
 
 
-        <div class="panel">
+        <div class="panel table">
 
-            <div style="padding:20px">
+            <table>
 
-                <h2 style="margin:0">
-                    Assessment Requests
-                </h2>
+                <thead>
 
-            </div>
+                    <tr>
+
+                        <th>ID</th>
+                        <th>Website</th>
+                        <th>Email</th>
+                        <th>Target</th>
+                        <th>Status</th>
+                        <th>Action</th>
+
+                    </tr>
+
+                </thead>
 
 
-            <div class="table-wrap">
+                <tbody>
 
-                <table>
-
-                    <thead>
-
+                    {
+                        "".join(table_rows)
+                        or
+                        """
                         <tr>
 
-                            <th>
-                                ID
-                            </th>
+                            <td colspan="6">
 
-                            <th>
-                                Website
-                            </th>
+                                <div class="empty">
+                                    No requests yet.
+                                </div>
 
-                            <th>
-                                Email
-                            </th>
-
-                            <th>
-                                Target
-                            </th>
-
-                            <th>
-                                Status
-                            </th>
-
-                            <th>
-                                Action
-                            </th>
+                            </td>
 
                         </tr>
+                        """
+                    }
 
-                    </thead>
+                </tbody>
 
-                    <tbody>
-
-                        {rows}
-
-                    </tbody>
-
-                </table>
-
-            </div>
+            </table>
 
         </div>
 
@@ -3008,8 +2918,32 @@ if (
     )
 
 
+@app.route(
+    "/api/admin/requests"
+)
+@admin_required
+def api_admin_requests():
+
+    connection = db()
+
+    count = connection.execute(
+        """
+        SELECT COUNT(*) AS value
+        FROM requests
+        """
+    ).fetchone()["value"]
+
+    connection.close()
+
+    return jsonify(
+        {
+            "count": count
+        }
+    )
+
+
 # ============================================================
-# ADMIN REQUEST PAGE
+# ADMIN REQUEST
 # ============================================================
 
 @app.route(
@@ -3028,7 +2962,7 @@ def admin_request(request_id):
 
     if request.method == "POST":
 
-        new_status = request.form.get(
+        status = request.form.get(
             "status",
             ""
         )
@@ -3038,40 +2972,31 @@ def admin_request(request_id):
             "ACCEPTED",
             "IN PROGRESS",
             "COMPLETED",
-            "DECLINED",
+            "DECLINED"
         }
 
-        if new_status in allowed:
+        if status in allowed:
+
+            timestamp = now()
 
             connection = db()
 
             connection.execute(
                 """
                 UPDATE requests
-                SET status = ?,
-                    updated_at = ?
-                WHERE id = ?
+                SET status=?,
+                    updated_at=?
+                WHERE id=?
                 """,
                 (
-                    new_status,
-                    now(),
+                    status,
+                    timestamp,
                     request_id
                 )
             )
 
             connection.commit()
             connection.close()
-
-            socketio.emit(
-                "report_ready",
-                {
-                    "request_id":
-                        request_id,
-                    "status":
-                        new_status
-                },
-                room=f"request_{request_id}"
-            )
 
             item = get_request(
                 request_id
@@ -3083,7 +3008,7 @@ def admin_request(request_id):
         """
         SELECT *
         FROM messages
-        WHERE request_id = ?
+        WHERE request_id=?
         ORDER BY id ASC
         """,
         (request_id,)
@@ -3093,7 +3018,7 @@ def admin_request(request_id):
         """
         SELECT *
         FROM findings
-        WHERE request_id = ?
+        WHERE request_id=?
         ORDER BY id DESC
         """,
         (request_id,)
@@ -3101,121 +3026,8 @@ def admin_request(request_id):
 
     connection.close()
 
-    message_html = ""
-
-    for message in messages:
-
-        sender_class = (
-            "admin"
-            if message["sender"] == "admin"
-            else "client"
-        )
-
-        message_html += f"""
-        <div class="msg {sender_class}">
-
-            <div class="who">
-                {esc(message["sender"])}
-            </div>
-
-            <div>
-                {esc(message["message"])}
-            </div>
-
-            <div class="time">
-                {esc(message["created_at"])}
-            </div>
-
-        </div>
-        """
-
-    if not message_html:
-
-        message_html = """
-        <div class="empty">
-            No messages yet.
-        </div>
-        """
-
-    finding_html = ""
-
-    for finding in findings:
-
-        sev = severity_class(
-            finding["severity"]
-        )
-
-        finding_html += f"""
-        <div class="panel finding">
-
-            <div class="finding-header">
-
-                <div>
-
-                    <div class="severity {sev}">
-                        {esc(finding["severity"])}
-                    </div>
-
-                    <h3>
-                        {esc(finding["title"])}
-                    </h3>
-
-                </div>
-
-                <span class="muted">
-                    #{finding["id"]}
-                </span>
-
-            </div>
-
-            <p class="muted">
-
-                <strong>
-                    Description
-                </strong>
-
-                <br>
-
-                {esc(finding["description"])}
-
-            </p>
-
-            <p class="muted">
-
-                <strong>
-                    Evidence
-                </strong>
-
-                <br>
-
-                {esc(finding["evidence"])}
-
-            </p>
-
-            <p class="muted">
-
-                <strong>
-                    Recommendation
-                </strong>
-
-                <br>
-
-                {esc(finding["recommendation"])}
-
-            </p>
-
-        </div>
-        """
-
-    if not finding_html:
-
-        finding_html = """
-        <div class="panel empty">
-            No findings published.
-        </div>
-        """
-
     def selected(value):
+
         return (
             "selected"
             if item["status"] == value
@@ -3223,131 +3035,89 @@ def admin_request(request_id):
         )
 
     script = f"""
-const socket = io();
+async function refreshAdminRequest(){
 
-socket.on("connect", () => {{
+    try{
 
-    socket.emit("join_admin");
-
-    socket.emit(
-        "join_request",
-        {{
-            request_id: {request_id}
-        }}
-    );
-
-}});
-
-
-socket.on(
-    "new_message",
-    (data) => {{
-
-        if (
-            data.request_id !==
-            {request_id}
-        ) {{
-            return;
-        }}
-
-        const box =
-            document.getElementById(
-                "admin-chat-box"
+        const response =
+            await fetch(
+                "/api/admin/request/{request_id}",
+                {
+                    cache:"no-store"
+                }
             );
 
-        box.insertAdjacentHTML(
-            "beforeend",
-            `
-            <div class="msg client">
+        if(!response.ok){
+            return;
+        }
 
-                <div class="who">
-                    ${{escapeHtml(
-                        data.sender
-                    )}}
-                </div>
+        const data =
+            await response.json();
 
-                <div>
-                    ${{escapeHtml(
-                        data.message
-                    )}}
-                </div>
+        if(
+            data.updated_at !==
+            window.currentUpdated
+        ){
+            location.reload();
+        }
 
-                <div class="time">
-                    ${{escapeHtml(
-                        data.created_at
-                    )}}
-                </div>
+    }catch(error){}
+}
 
-            </div>
-            `
-        );
+window.currentUpdated =
+    {repr(item["updated_at"])};
 
-        box.scrollTop =
-            box.scrollHeight;
-
-    }}
+setInterval(
+    refreshAdminRequest,
+    2500
 );
-
-
-function escapeHtml(str) {{
-
-    return String(str)
-
-        .replaceAll(
-            "&",
-            "&amp;"
-        )
-
-        .replaceAll(
-            "<",
-            "&lt;"
-        )
-
-        .replaceAll(
-            ">",
-            "&gt;"
-        )
-
-        .replaceAll(
-            '"',
-            "&quot;"
-        )
-
-        .replaceAll(
-            "'",
-            "&#039;"
-        );
-
-}}
 """
 
     body = f"""
 <section class="section">
 
-    <div class="container">
+    <div class="wrap">
 
-        <div style="margin-bottom:22px">
+        <div class="head">
 
-            <div class="status-line">
+            <div>
 
-                <span class="dot"></span>
+                <div class="status">
 
-                REQUEST #{request_id}
+                    <span class="dot"></span>
+
+                    REQUEST #{request_id}
+
+                </div>
+
+
+                <h1 class="title">
+
+                    {esc(item["web_name"])}
+
+                </h1>
+
+
+                <p class="muted">
+
+                    {esc(item["target"])}
+
+                </p>
 
             </div>
 
-            <h1 class="section-title">
-                {esc(item["web_name"])}
-            </h1>
 
-            <p class="muted">
-                {esc(item["target"])}
-            </p>
+            <a
+                class="btn dark"
+                href="/admin"
+            >
+                ← Dashboard
+            </a>
 
         </div>
 
 
-        <div class="dashboard-grid">
+        <div class="two">
 
             <div>
 
@@ -3363,10 +3133,7 @@ function escapeHtml(str) {{
 
                     <p class="muted">
 
-                        <strong>
-                            Name:
-                        </strong>
-
+                        <b>Name:</b>
                         {esc(item["name"])}
 
                     </p>
@@ -3374,10 +3141,7 @@ function escapeHtml(str) {{
 
                     <p class="muted">
 
-                        <strong>
-                            Email:
-                        </strong>
-
+                        <b>Email:</b>
                         {esc(item["email"])}
 
                     </p>
@@ -3385,10 +3149,7 @@ function escapeHtml(str) {{
 
                     <p class="muted">
 
-                        <strong>
-                            Web Name:
-                        </strong>
-
+                        <b>Web Name:</b>
                         {esc(item["web_name"])}
 
                     </p>
@@ -3396,10 +3157,7 @@ function escapeHtml(str) {{
 
                     <p class="muted">
 
-                        <strong>
-                            Target:
-                        </strong>
-
+                        <b>Target:</b>
                         {esc(item["target"])}
 
                     </p>
@@ -3407,41 +3165,11 @@ function escapeHtml(str) {{
 
                     <p class="muted">
 
-                        <strong>
-                            Scope:
-                        </strong>
+                        <b>Scope:</b>
 
                         <br>
 
                         {esc(item["scope"])}
-
-                    </p>
-
-
-                    <p class="muted">
-
-                        <strong>
-                            DNS:
-                        </strong>
-
-                        {esc(
-                            resolve_target(
-                                item["target"]
-                            )
-                            or
-                            "Not resolved"
-                        )}
-
-                    </p>
-
-
-                    <p class="muted">
-
-                        <strong>
-                            Created:
-                        </strong>
-
-                        {esc(item["created_at"])}
 
                     </p>
 
@@ -3454,18 +3182,11 @@ function escapeHtml(str) {{
                 >
 
                     <h3>
-                        Change Request Status
+                        Change Status
                     </h3>
 
 
-                    <form
-                        method="POST"
-                        style="
-                        display:flex;
-                        gap:10px;
-                        flex-wrap:wrap
-                        "
-                    >
+                    <form method="POST">
 
                         <select
                             name="status"
@@ -3514,9 +3235,11 @@ function escapeHtml(str) {{
 
 
                         <button
-                            class="btn btn-primary"
+                            class="btn primary"
+                            type="submit"
+                            style="margin-top:10px"
                         >
-                            Update Status
+                            UPDATE STATUS
                         </button>
 
                     </form>
@@ -3524,52 +3247,42 @@ function escapeHtml(str) {{
                 </div>
 
 
-                <div>
+                <h2 class="title">
+                    Findings
+                </h2>
 
-                    <h2 class="section-title">
-                        Findings
-                    </h2>
 
-                    {finding_html}
-
-                </div>
+                {render_findings(findings)}
 
             </div>
 
 
             <div class="panel chat">
 
-                <div
-                    style="
-                    padding:20px;
-                    border-bottom:1px solid var(--border)
-                    "
-                >
+                <div class="card">
 
                     <h3 style="margin:0">
                         Client Chat
                     </h3>
 
-                    <p
-                        class="muted"
-                        style="margin:7px 0 0"
-                    >
-                        Live communication.
+                    <p class="muted">
+
+                        Messages update automatically.
+
                     </p>
 
                 </div>
 
 
-                <div
-                    class="chat-box"
-                    id="admin-chat-box"
-                >
-                    {message_html}
+                <div class="chatbox">
+
+                    {render_messages(messages)}
+
                 </div>
 
 
                 <form
-                    class="chat-form"
+                    class="chatform"
                     method="POST"
                     action="/admin/request/{request_id}/message"
                 >
@@ -3581,8 +3294,10 @@ function escapeHtml(str) {{
                         required
                     >
 
+
                     <button
-                        class="btn btn-primary"
+                        class="btn primary"
+                        type="submit"
                     >
                         Send
                     </button>
@@ -3594,157 +3309,143 @@ function escapeHtml(str) {{
         </div>
 
 
-        <div style="margin-top:20px">
+        <div
+            class="panel card"
+            style="margin-top:18px"
+        >
 
-            <div class="panel card">
-
-                <h2 style="margin-top:0">
-                    Publish Finding
-                </h2>
-
-
-                <form
-                    method="POST"
-                    action="/admin/request/{request_id}/finding"
-                >
-
-                    <div class="form-grid">
+            <h2 style="margin-top:0">
+                Publish Finding
+            </h2>
 
 
-                        <div class="field">
+            <form
+                method="POST"
+                action="/admin/request/{request_id}/finding"
+            >
 
-                            <label>
-                                Finding Title
-                            </label>
+                <div class="grid">
 
-                            <input
-                                name="title"
-                                placeholder="Information Disclosure"
-                                required
-                            >
+                    <div class="field">
 
-                        </div>
+                        <label>
+                            Finding Title
+                        </label>
 
-
-                        <div class="field">
-
-                            <label>
-                                Severity
-                            </label>
-
-                            <select
-                                name="severity"
-                                required
-                            >
-
-                                <option>
-                                    INFO
-                                </option>
-
-                                <option>
-                                    LOW
-                                </option>
-
-                                <option>
-                                    MEDIUM
-                                </option>
-
-                                <option>
-                                    HIGH
-                                </option>
-
-                                <option>
-                                    CRITICAL
-                                </option>
-
-                            </select>
-
-                        </div>
-
-
-                        <div class="field full">
-
-                            <label>
-                                Description
-                            </label>
-
-                            <textarea
-                                name="description"
-                                placeholder="Explain the finding..."
-                                required
-                            ></textarea>
-
-                        </div>
-
-
-                        <div class="field full">
-
-                            <label>
-                                Evidence
-                            </label>
-
-                            <textarea
-                                name="evidence"
-                                placeholder="Describe the evidence..."
-                                required
-                            ></textarea>
-
-                        </div>
-
-
-                        <div class="field full">
-
-                            <label>
-                                Recommendation
-                            </label>
-
-                            <textarea
-                                name="recommendation"
-                                placeholder="Explain how the client can fix it..."
-                                required
-                            ></textarea>
-
-                        </div>
-
-
-                        <div class="field full">
-
-                            <button
-                                class="btn btn-green"
-                                type="submit"
-                            >
-                                PUBLISH FINDING
-                            </button>
-
-                        </div>
+                        <input
+                            name="title"
+                            placeholder="Information Disclosure"
+                            required
+                        >
 
                     </div>
 
-                </form>
 
-            </div>
+                    <div class="field">
+
+                        <label>
+                            Severity
+                        </label>
+
+                        <select
+                            name="severity"
+                        >
+
+                            <option>
+                                INFO
+                            </option>
+
+                            <option>
+                                LOW
+                            </option>
+
+                            <option>
+                                MEDIUM
+                            </option>
+
+                            <option>
+                                HIGH
+                            </option>
+
+                            <option>
+                                CRITICAL
+                            </option>
+
+                        </select>
+
+                    </div>
+
+
+                    <div class="field full">
+
+                        <label>
+                            Description
+                        </label>
+
+                        <textarea
+                            name="description"
+                            required
+                        ></textarea>
+
+                    </div>
+
+
+                    <div class="field full">
+
+                        <label>
+                            Evidence
+                        </label>
+
+                        <textarea
+                            name="evidence"
+                            required
+                        ></textarea>
+
+                    </div>
+
+
+                    <div class="field full">
+
+                        <label>
+                            Recommendation
+                        </label>
+
+                        <textarea
+                            name="recommendation"
+                            required
+                        ></textarea>
+
+                    </div>
+
+
+                    <div class="field full">
+
+                        <button
+                            class="btn green"
+                            type="submit"
+                        >
+                            PUBLISH FINDING
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </form>
 
         </div>
 
 
         <div
-            style="
-            margin-top:20px
-            "
+            class="actions"
+            style="margin-top:18px"
         >
 
             <a
-                class="btn btn-dark"
+                class="btn dark"
                 href="/admin/report/{request_id}"
             >
                 View Full Report →
-            </a>
-
-            <a
-                class="btn btn-dark"
-                href="/admin"
-            >
-                ← Back to Dashboard
             </a>
 
         </div>
@@ -3762,6 +3463,39 @@ function escapeHtml(str) {{
 
 
 @app.route(
+    "/api/admin/request/<int:request_id>"
+)
+@admin_required
+def api_admin_request(request_id):
+
+    item = get_request(
+        request_id
+    )
+
+    if not item:
+        return jsonify(
+            {
+                "error":
+                "not found"
+            }
+        ), 404
+
+    return jsonify(
+        {
+            "updated_at":
+                item["updated_at"],
+
+            "status":
+                item["status"]
+        }
+    )
+
+
+# ============================================================
+# ADMIN MESSAGE
+# ============================================================
+
+@app.route(
     "/admin/request/<int:request_id>/message",
     methods=["POST"]
 )
@@ -3773,50 +3507,49 @@ def admin_message(request_id):
         ""
     ).strip()
 
-    if not message:
+    if message:
 
-        return redirect(
-            url_for(
-                "admin_request",
-                request_id=request_id
+        timestamp = now()
+
+        connection = db()
+
+        connection.execute(
+            """
+            INSERT INTO messages(
+                request_id,
+                sender,
+                message,
+                created_at
+            )
+            VALUES(
+                ?,
+                ?,
+                ?,
+                ?
+            )
+            """,
+            (
+                request_id,
+                "admin",
+                message,
+                timestamp
             )
         )
 
-    created = now()
-
-    connection = db()
-
-    connection.execute(
-        """
-        INSERT INTO messages (
-            request_id,
-            sender,
-            message,
-            created_at
+        connection.execute(
+            """
+            UPDATE requests
+            SET updated_at=?
+            WHERE id=?
+            """,
+            (
+                timestamp,
+                request_id
+            )
         )
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            request_id,
-            "admin",
-            message,
-            created
-        )
-    )
 
-    connection.commit()
-    connection.close()
-
-    socketio.emit(
-        "new_message",
-        {
-            "request_id": request_id,
-            "sender": "admin",
-            "message": message,
-            "created_at": created
-        },
-        room=f"request_{request_id}"
-    )
+        connection.commit()
+        connection.close()
 
     return redirect(
         url_for(
@@ -3825,6 +3558,10 @@ def admin_message(request_id):
         )
     )
 
+
+# ============================================================
+# FINDING
+# ============================================================
 
 @app.route(
     "/admin/request/<int:request_id>/finding",
@@ -3858,7 +3595,7 @@ def add_finding(request_id):
         ""
     ).strip()
 
-    allowed_severity = {
+    allowed = {
         "INFO",
         "LOW",
         "MEDIUM",
@@ -3866,22 +3603,27 @@ def add_finding(request_id):
         "CRITICAL"
     }
 
-    if severity not in allowed_severity:
-        abort(400)
-
     if (
-        not title
-        or not description
-        or not evidence
-        or not recommendation
+        severity not in allowed
+        or
+        not all(
+            [
+                title,
+                description,
+                evidence,
+                recommendation
+            ]
+        )
     ):
         abort(400)
 
+    timestamp = now()
+
     connection = db()
 
-    cursor = connection.execute(
+    connection.execute(
         """
-        INSERT INTO findings (
+        INSERT INTO findings(
             request_id,
             title,
             severity,
@@ -3890,7 +3632,15 @@ def add_finding(request_id):
             recommendation,
             created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES(
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
+        )
         """,
         (
             request_id,
@@ -3899,39 +3649,24 @@ def add_finding(request_id):
             description,
             evidence,
             recommendation,
-            now()
+            timestamp
+        )
+    )
+
+    connection.execute(
+        """
+        UPDATE requests
+        SET updated_at=?
+        WHERE id=?
+        """,
+        (
+            timestamp,
+            request_id
         )
     )
 
     connection.commit()
-
-    finding_id = cursor.lastrowid
-
     connection.close()
-
-    socketio.emit(
-        "finding_new",
-        {
-            "request_id":
-                request_id,
-            "finding_id":
-                finding_id,
-            "title":
-                title,
-            "severity":
-                severity
-        },
-        room=f"request_{request_id}"
-    )
-
-    socketio.emit(
-        "report_ready",
-        {
-            "request_id":
-                request_id
-        },
-        room=f"request_{request_id}"
-    )
 
     return redirect(
         url_for(
@@ -3942,7 +3677,7 @@ def add_finding(request_id):
 
 
 # ============================================================
-# ADMIN REPORT
+# REPORTS
 # ============================================================
 
 @app.route(
@@ -3964,7 +3699,7 @@ def admin_report(request_id):
         """
         SELECT *
         FROM findings
-        WHERE request_id = ?
+        WHERE request_id=?
         ORDER BY id DESC
         """,
         (request_id,)
@@ -3972,106 +3707,16 @@ def admin_report(request_id):
 
     connection.close()
 
-    findings_html = ""
-
-    for finding in findings:
-
-        sev = severity_class(
-            finding["severity"]
-        )
-
-        findings_html += f"""
-        <div class="panel finding">
-
-            <div class="finding-header">
-
-                <div>
-
-                    <div
-                        class="severity {sev}"
-                    >
-                        {esc(finding["severity"])}
-                    </div>
-
-                    <h3>
-                        {esc(finding["title"])}
-                    </h3>
-
-                </div>
-
-                <span class="muted">
-                    #{finding["id"]}
-                </span>
-
-            </div>
-
-
-            <p>
-
-                <strong>
-                    Description
-                </strong>
-
-                <br>
-
-                <span class="muted">
-                    {esc(finding["description"])}
-                </span>
-
-            </p>
-
-
-            <p>
-
-                <strong>
-                    Evidence
-                </strong>
-
-                <br>
-
-                <span class="muted">
-                    {esc(finding["evidence"])}
-                </span>
-
-            </p>
-
-
-            <p>
-
-                <strong>
-                    Recommendation
-                </strong>
-
-                <br>
-
-                <span class="muted">
-                    {esc(finding["recommendation"])}
-                </span>
-
-            </p>
-
-        </div>
-        """
-
-    if not findings_html:
-
-        findings_html = """
-        <div class="panel empty">
-            No findings are included
-            in this report yet.
-        </div>
-        """
-
     body = f"""
 <section class="section">
 
-    <div class="container">
+    <div class="wrap">
 
-        <div class="report-head">
+        <div class="head">
 
             <div>
 
-                <div class="status-line">
+                <div class="status">
 
                     <span class="dot"></span>
 
@@ -4079,31 +3724,25 @@ def admin_report(request_id):
 
                 </div>
 
-                <h1 class="section-title">
 
+                <h1 class="title">
                     {esc(item["web_name"])}
-
                 </h1>
 
+
                 <p class="muted">
-
-                    Request #{item["id"]}
-
+                    {esc(item["target"])}
                 </p>
 
             </div>
 
 
-            <div class="actions">
-
-                <a
-                    class="btn btn-dark"
-                    href="/admin/request/{request_id}"
-                >
-                    ← Back
-                </a>
-
-            </div>
+            <a
+                class="btn dark"
+                href="/admin/request/{request_id}"
+            >
+                ← Back
+            </a>
 
         </div>
 
@@ -4113,62 +3752,40 @@ def admin_report(request_id):
             style="margin-bottom:18px"
         >
 
-            <h2 style="margin-top:0">
-
+            <h3>
                 Assessment Overview
-
-            </h2>
+            </h3>
 
 
             <p class="muted">
-
-                <strong>
-                    Client:
-                </strong>
-
+                <b>Client:</b>
                 {esc(item["name"])}
-
             </p>
 
 
             <p class="muted">
-
-                <strong>
-                    Email:
-                </strong>
-
+                <b>Email:</b>
                 {esc(item["email"])}
-
             </p>
 
 
             <p class="muted">
-
-                <strong>
-                    Website:
-                </strong>
-
+                <b>Website:</b>
                 {esc(item["web_name"])}
-
             </p>
 
 
             <p class="muted">
-
-                <strong>
-                    Target:
-                </strong>
-
+                <b>Target:</b>
                 {esc(item["target"])}
-
             </p>
 
 
             <p class="muted">
 
-                <strong>
-                    Scope:
-                </strong>
+                <b>
+                    Authorized Scope:
+                </b>
 
                 <br>
 
@@ -4179,9 +3796,9 @@ def admin_report(request_id):
 
             <p class="muted">
 
-                <strong>
+                <b>
                     Status:
-                </strong>
+                </b>
 
                 {esc(item["status"])}
 
@@ -4190,11 +3807,12 @@ def admin_report(request_id):
         </div>
 
 
-        <h2 class="section-title">
+        <h2 class="title">
             Findings
         </h2>
 
-        {findings_html}
+
+        {render_findings(findings)}
 
     </div>
 
@@ -4206,10 +3824,6 @@ def admin_report(request_id):
         body
     )
 
-
-# ============================================================
-# CLIENT REPORT
-# ============================================================
 
 @app.route(
     "/report/<int:request_id>"
@@ -4231,16 +3845,13 @@ def client_report(request_id):
         request_id
     )
 
-    if not item:
-        abort(404)
-
     connection = db()
 
     findings = connection.execute(
         """
         SELECT *
         FROM findings
-        WHERE request_id = ?
+        WHERE request_id=?
         ORDER BY id DESC
         """,
         (request_id,)
@@ -4248,98 +3859,16 @@ def client_report(request_id):
 
     connection.close()
 
-    findings_html = ""
-
-    for finding in findings:
-
-        sev = severity_class(
-            finding["severity"]
-        )
-
-        findings_html += f"""
-        <div class="panel finding">
-
-            <div class="finding-header">
-
-                <div>
-
-                    <div
-                        class="severity {sev}"
-                    >
-                        {esc(finding["severity"])}
-                    </div>
-
-                    <h3>
-                        {esc(finding["title"])}
-                    </h3>
-
-                </div>
-
-            </div>
-
-
-            <p class="muted">
-
-                <strong>
-                    Description
-                </strong>
-
-                <br>
-
-                {esc(finding["description"])}
-
-            </p>
-
-
-            <p class="muted">
-
-                <strong>
-                    Evidence
-                </strong>
-
-                <br>
-
-                {esc(finding["evidence"])}
-
-            </p>
-
-
-            <p class="muted">
-
-                <strong>
-                    Recommendation
-                </strong>
-
-                <br>
-
-                {esc(finding["recommendation"])}
-
-            </p>
-
-        </div>
-        """
-
-    if not findings_html:
-
-        findings_html = """
-        <div class="panel empty">
-
-            Your report does not contain
-            published findings yet.
-
-        </div>
-        """
-
     body = f"""
 <section class="section">
 
-    <div class="container">
+    <div class="wrap">
 
-        <div class="report-head">
+        <div class="head">
 
             <div>
 
-                <div class="status-line">
+                <div class="status">
 
                     <span class="dot"></span>
 
@@ -4347,11 +3876,13 @@ def client_report(request_id):
 
                 </div>
 
-                <h1 class="section-title">
+
+                <h1 class="title">
 
                     {esc(item["web_name"])}
 
                 </h1>
+
 
                 <p class="muted">
 
@@ -4374,39 +3905,40 @@ def client_report(request_id):
 
         <div
             class="panel card"
-            style="margin-bottom:20px"
+            style="margin-bottom:18px"
         >
 
-            <h2 style="margin-top:0">
+            <h3>
                 Executive Summary
-            </h2>
+            </h3>
+
 
             <p class="muted">
 
-                This report contains security
-                findings that have been published
-                by the assessment administrator.
-
-                The assessment is limited to the
-                authorized scope supplied with
-                this request.
+                This report contains
+                findings published by the
+                assessment administrator
+                and is limited to the
+                authorized scope supplied
+                with the request.
 
             </p>
 
         </div>
 
 
-        <h2 class="section-title">
+        <h2 class="title">
             Security Findings
         </h2>
 
-        {findings_html}
+
+        {render_findings(findings)}
 
 
-        <div style="margin-top:20px">
+        <div style="margin-top:18px">
 
             <a
-                class="btn btn-dark"
+                class="btn dark"
                 href="/status/{request_id}?token={esc(token)}"
             >
                 ← Back to Portal
@@ -4437,7 +3969,9 @@ def admin_logout():
     session.clear()
 
     return redirect(
-        url_for("home")
+        url_for(
+            "home"
+        )
     )
 
 
@@ -4448,20 +3982,19 @@ def admin_logout():
 @app.errorhandler(403)
 def forbidden(_error):
 
-    body = """
+    return page(
+        "Access Denied",
+        """
 <section class="section">
 
-    <div
-        class="container"
-        style="max-width:700px"
-    >
+    <div class="wrap">
 
         <div
             class="panel card"
             style="text-align:center"
         >
 
-            <div style="font-size:60px">
+            <div style="font-size:55px">
                 🔒
             </div>
 
@@ -4471,13 +4004,13 @@ def forbidden(_error):
 
             <p class="muted">
 
-                This portal link is
-                private or invalid.
+                This private portal link
+                is invalid.
 
             </p>
 
             <a
-                class="btn btn-primary"
+                class="btn primary"
                 href="/"
             >
                 Return Home
@@ -4489,30 +4022,25 @@ def forbidden(_error):
 
 </section>
 """
-
-    return page(
-        "Access Denied",
-        body
     ), 403
 
 
 @app.errorhandler(404)
 def not_found(_error):
 
-    body = """
+    return page(
+        "Not Found",
+        """
 <section class="section">
 
-    <div
-        class="container"
-        style="max-width:700px"
-    >
+    <div class="wrap">
 
         <div
             class="panel card"
             style="text-align:center"
         >
 
-            <div style="font-size:60px">
+            <div style="font-size:55px">
                 🛰️
             </div>
 
@@ -4521,14 +4049,11 @@ def not_found(_error):
             </h1>
 
             <p class="muted">
-
-                The requested security portal
-                page does not exist.
-
+                This page does not exist.
             </p>
 
             <a
-                class="btn btn-primary"
+                class="btn primary"
                 href="/"
             >
                 Return Home
@@ -4540,10 +4065,6 @@ def not_found(_error):
 
 </section>
 """
-
-    return page(
-        "Not Found",
-        body
     ), 404
 
 
@@ -4553,37 +4074,43 @@ def not_found(_error):
 
 init_db()
 
+
 if __name__ == "__main__":
 
-    print("")
-    print("==============================================")
-    print("      MATIA // SECURITY CHECK")
-    print("==============================================")
-    print("")
     print(
-        f"[+] Admin email: {ADMIN_EMAIL}"
+        "=========================================="
     )
-    print(
-        "[+] Database: connected"
-    )
-    print(
-        "[+] Automatic scanning: DISABLED"
-    )
-    print(
-        "[+] DNS resolution: ENABLED"
-    )
-    print(
-        "[+] Live Socket.IO: ENABLED"
-    )
-    print("")
-    print(
-        f"[+] Server starting on port {PORT}"
-    )
-    print("")
 
-    socketio.run(
-        app,
+    print(
+        "      MATIA // SECURITY CHECK"
+    )
+
+    print(
+        "=========================================="
+    )
+
+    print(
+        f"Admin email: {ADMIN_EMAIL}"
+    )
+
+    print(
+        f"Port: {PORT}"
+    )
+
+    print(
+        "Automatic scanning: DISABLED"
+    )
+
+    print(
+        "Database: READY"
+    )
+
+    print(
+        "=========================================="
+    )
+
+    app.run(
         host="0.0.0.0",
         port=PORT,
-        allow_unsafe_werkzeug=True
+        debug=False
     )
