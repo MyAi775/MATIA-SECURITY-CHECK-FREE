@@ -1,10 +1,9 @@
 import os
-import html
-import secrets
 import sqlite3
-from datetime import datetime
+import secrets
+import hmac
+from datetime import datetime, timezone
 from functools import wraps
-from urllib.parse import urlparse
 
 from flask import (
     Flask,
@@ -12,12 +11,31 @@ from flask import (
     redirect,
     url_for,
     session,
-    abort,
-    jsonify,
     render_template_string,
+    jsonify,
+    abort,
+    flash,
 )
 
-APP_NAME = "MATIA // SECURITY CHECK"
+app = Flask(__name__)
+
+# ============================================================
+# CONFIG
+# ============================================================
+
+app.secret_key = os.getenv(
+    "MATIA_SECRET_KEY",
+    "CHANGE-ME-IN-RENDER"
+)
+
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv(
+        "COOKIE_SECURE",
+        "true"
+    ).lower() == "true",
+)
 
 ADMIN_EMAIL = os.getenv(
     "MATIA_ADMIN_EMAIL",
@@ -27,48 +45,15 @@ ADMIN_EMAIL = os.getenv(
 ADMIN_PASSWORD = os.getenv(
     "MATIA_ADMIN_PASSWORD",
     ""
+).strip()
+
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
 )
 
-SECRET_KEY = os.getenv(
-    "MATIA_SECRET_KEY",
-    ""
-)
-
-DB_FILE = os.getenv(
-    "MATIA_DB_FILE",
+DB_PATH = os.path.join(
+    BASE_DIR,
     "matia_security.db"
-)
-
-PORT = int(
-    os.getenv(
-        "PORT",
-        "5000"
-    )
-)
-
-if not ADMIN_PASSWORD:
-    raise RuntimeError(
-        "MATIA_ADMIN_PASSWORD is missing."
-    )
-
-if not SECRET_KEY:
-    raise RuntimeError(
-        "MATIA_SECRET_KEY is missing."
-    )
-
-
-app = Flask(__name__)
-
-app.config.update(
-    SECRET_KEY=SECRET_KEY,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=(
-        os.getenv(
-            "COOKIE_SECURE",
-            "true"
-        ).lower() == "true"
-    ),
 )
 
 
@@ -78,61 +63,43 @@ app.config.update(
 
 CSS = r'''
 :root{
-    --bg:#05070b;
-    --panel:#0c121b;
-    --panel2:#111927;
-    --border:#202c3f;
-    --text:#eef4ff;
-    --muted:#91a3bb;
-    --accent:#6d7cff;
+    --bg:#060812;
+    --panel:#0d1220;
+    --panel2:#111827;
+    --line:#24304a;
+    --text:#e8eefc;
+    --muted:#8d9ab5;
     --cyan:#00e5ff;
-    --green:#27e99a;
-    --red:#ff506a;
-    --yellow:#ffc857;
-    --shadow:0 24px 80px rgba(0,0,0,.35);
+    --green:#28e38b;
+    --red:#ff5277;
+    --yellow:#ffd166;
+    --purple:#9b7bff;
 }
 
 *{
     box-sizing:border-box;
 }
 
-html{
-    scroll-behavior:smooth;
-}
-
 body{
     margin:0;
-    min-height:100vh;
+    background:
+        radial-gradient(
+            circle at 20% 0%,
+            #10243a 0,
+            #060812 35%,
+            #03050a 100%
+        );
     color:var(--text);
     font-family:
         Inter,
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
+        Segoe UI,
+        Arial,
         sans-serif;
-
-    background:
-        radial-gradient(
-            circle at 10% 0%,
-            rgba(109,124,255,.17),
-            transparent 28%
-        ),
-        radial-gradient(
-            circle at 100% 10%,
-            rgba(0,229,255,.09),
-            transparent 25%
-        ),
-        linear-gradient(
-            180deg,
-            #04060a,
-            #080c12 55%,
-            #05070b
-        );
+    min-height:100vh;
 }
 
 a{
-    color:inherit;
+    color:var(--cyan);
     text-decoration:none;
 }
 
@@ -143,645 +110,409 @@ select{
     font:inherit;
 }
 
-.wrap{
-    width:min(1180px,92%);
-    margin:auto;
-}
-
-.top{
-    position:sticky;
-    top:0;
-    z-index:50;
-    background:rgba(4,6,10,.78);
-    backdrop-filter:blur(16px);
-    border-bottom:1px solid rgba(255,255,255,.06);
+button{
+    cursor:pointer;
 }
 
 .nav{
-    height:72px;
+    position:sticky;
+    top:0;
+    z-index:20;
+    background:rgba(5,8,16,.86);
+    backdrop-filter:blur(16px);
+    border-bottom:1px solid var(--line);
+    padding:15px 5%;
     display:flex;
     align-items:center;
     justify-content:space-between;
-    gap:20px;
 }
 
 .brand{
+    font-weight:900;
+    letter-spacing:1.5px;
+}
+
+.brand span{
+    color:var(--cyan);
+}
+
+.navlinks{
     display:flex;
+    gap:14px;
     align-items:center;
-    gap:11px;
-    font-weight:950;
-    letter-spacing:.7px;
 }
 
-.logo{
-    width:39px;
-    height:39px;
-    display:grid;
-    place-items:center;
-    border-radius:12px;
-    background:
-        linear-gradient(
-            135deg,
-            var(--accent),
-            var(--cyan)
-        );
-    color:#03060b;
-    box-shadow:
-        0 0 32px
-        rgba(109,124,255,.35);
-}
-
-.brand small{
-    display:block;
+.navlinks a,
+.navlinks button{
     color:var(--muted);
-    font-size:9px;
-    letter-spacing:1.7px;
-    margin-top:2px;
+    background:none;
+    border:0;
 }
 
-.links{
-    display:flex;
-    gap:5px;
-}
-
-.links a{
-    padding:10px 12px;
-    color:var(--muted);
-    border-radius:10px;
-}
-
-.links a:hover{
-    background:rgba(255,255,255,.05);
-    color:var(--text);
+.wrap{
+    width:min(1180px,92%);
+    margin:35px auto;
 }
 
 .hero{
-    padding:90px 0 50px;
-}
-
-.hero-grid,
-.two{
-    display:grid;
-    grid-template-columns:1.12fr .88fr;
-    gap:20px;
-}
-
-.status{
-    display:flex;
-    align-items:center;
-    gap:9px;
-    color:var(--green);
-    font-size:12px;
-    font-weight:850;
-    letter-spacing:.5px;
-}
-
-.dot{
-    width:8px;
-    height:8px;
-    border-radius:50%;
-    background:var(--green);
-    box-shadow:0 0 16px var(--green);
+    padding:28px 0;
 }
 
 .hero h1{
-    font-size:clamp(46px,7vw,86px);
-    line-height:.93;
-    letter-spacing:-4px;
-    margin:12px 0 20px;
+    font-size:clamp(30px,5vw,56px);
+    margin:0 0 10px;
 }
 
-.grad{
-    background:
-        linear-gradient(
-            90deg,
-            #fff,
-            var(--cyan),
-            #99a0ff
-        );
-    -webkit-background-clip:text;
-    background-clip:text;
-    color:transparent;
-}
-
-.muted{
+.hero p{
     color:var(--muted);
-    line-height:1.72;
-}
-
-.panel{
-    background:
-        linear-gradient(
-            180deg,
-            rgba(255,255,255,.035),
-            rgba(255,255,255,.012)
-        ),
-        var(--panel);
-
-    border:1px solid var(--border);
-    border-radius:22px;
-    box-shadow:var(--shadow);
-}
-
-.card{
-    padding:22px;
-}
-
-.section{
-    padding:34px 0;
-}
-
-.title{
-    margin:0 0 8px;
-    font-size:32px;
-}
-
-.sub{
-    margin:0 0 22px;
-    color:var(--muted);
-}
-
-.stats,
-.kpis,
-.cards{
-    display:grid;
-    gap:12px;
-}
-
-.stats{
-    grid-template-columns:repeat(3,1fr);
-    margin-top:24px;
-}
-
-.kpis{
-    grid-template-columns:repeat(4,1fr);
-}
-
-.cards{
-    grid-template-columns:repeat(3,1fr);
-}
-
-.stat,
-.kpi{
-    padding:18px;
-    border:1px solid var(--border);
-    border-radius:15px;
-    background:rgba(255,255,255,.02);
-}
-
-.stat strong,
-.kpi strong{
-    display:block;
-    font-size:25px;
-    margin-bottom:4px;
-}
-
-.stat span,
-.kpi span{
-    font-size:12px;
-    color:var(--muted);
-}
-
-.form{
-    width:min(900px,100%);
-    margin:32px auto 70px;
+    max-width:760px;
 }
 
 .grid{
     display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:16px;
+    grid-template-columns:
+        repeat(
+            auto-fit,
+            minmax(240px,1fr)
+        );
+    gap:18px;
 }
 
-.field{
-    display:flex;
-    flex-direction:column;
-    gap:8px;
+.card{
+    background:
+        linear-gradient(
+            145deg,
+            rgba(17,24,39,.96),
+            rgba(8,12,23,.96)
+        );
+    border:1px solid var(--line);
+    border-radius:18px;
+    padding:20px;
+    box-shadow:0 14px 50px #0005;
 }
 
-.full{
-    grid-column:1/-1;
+.stat{
+    font-size:32px;
+    font-weight:900;
 }
 
-label{
+.muted{
+    color:var(--muted);
+}
+
+.small{
     font-size:13px;
-    font-weight:850;
-    color:#cad6e7;
 }
 
-input,
-textarea,
-select{
+.form{
+    display:grid;
+    gap:14px;
+}
+
+.row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:14px;
+}
+
+.field label{
+    display:block;
+    font-size:13px;
+    color:var(--muted);
+    margin-bottom:7px;
+}
+
+.field input,
+.field textarea,
+.field select{
     width:100%;
-    padding:14px 15px;
-    border:1px solid var(--border);
-    border-radius:13px;
-    background:#080c12;
+    background:#070b15;
+    border:1px solid var(--line);
     color:var(--text);
+    border-radius:12px;
+    padding:12px;
     outline:none;
-    font:inherit;
 }
 
-input:focus,
-textarea:focus,
-select:focus{
-    border-color:var(--accent);
-    box-shadow:
-        0 0 0 3px
-        rgba(109,124,255,.12);
-}
-
-input[readonly]{
-    opacity:.9;
-}
-
-textarea{
-    min-height:130px;
+.field textarea{
+    min-height:120px;
     resize:vertical;
 }
 
-.check{
-    display:flex;
-    align-items:flex-start;
-    gap:9px;
-    color:var(--muted);
-    font-size:13px;
-    line-height:1.6;
+.field input:focus,
+.field textarea:focus,
+.field select:focus{
+    border-color:var(--cyan);
+    box-shadow:0 0 0 3px #00e5ff18;
 }
 
-.check input{
-    width:auto;
-    margin-top:4px;
+.btn{
+    border:1px solid var(--line);
+    border-radius:11px;
+    padding:11px 15px;
+    background:#111827;
+    color:var(--text);
+    font-weight:800;
+}
+
+.btn.primary{
+    background:var(--cyan);
+    color:#001018;
+    border-color:var(--cyan);
+}
+
+.btn.green{
+    background:var(--green);
+    color:#00130b;
+    border-color:var(--green);
+}
+
+.btn.red{
+    background:#3a101c;
+    color:#ff9ab0;
+    border-color:#702238;
+}
+
+.btn.yellow{
+    background:#332b0c;
+    color:#ffe8a0;
+    border-color:#695b19;
+}
+
+.btn.purple{
+    background:#21183e;
+    color:#c9b8ff;
+    border-color:#4f3b8e;
 }
 
 .actions{
     display:flex;
     flex-wrap:wrap;
-    gap:8px;
+    gap:9px;
 }
 
-.btn{
+.status{
     display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:8px;
-    padding:13px 17px;
-    border:0;
-    border-radius:12px;
-    color:#fff;
+    padding:6px 10px;
+    border-radius:999px;
+    font-size:12px;
     font-weight:900;
-    cursor:pointer;
-    transition:.18s;
+    border:1px solid var(--line);
 }
 
-.btn:hover{
-    transform:translateY(-1px);
+.pending{
+    color:var(--yellow);
 }
 
-.primary{
-    background:
-        linear-gradient(
-            135deg,
-            var(--accent),
-            #8e61ff
-        );
-    box-shadow:
-        0 14px 30px
-        rgba(109,124,255,.20);
+.accepted{
+    color:var(--cyan);
 }
 
-.dark{
-    background:#111824;
-    border:1px solid var(--border);
+.in-progress{
+    color:var(--purple);
 }
 
-.green{
-    background:
-        linear-gradient(
-            135deg,
-            #1cca7b,
-            #0ca45d
-        );
+.completed{
+    color:var(--green);
 }
 
-.red{
-    background:
-        linear-gradient(
-            135deg,
-            #ff536a,
-            #e33f57
-        );
+.declined{
+    color:var(--red);
 }
 
-.yellow{
-    background:
-        linear-gradient(
-            135deg,
-            #c99a2c,
-            #f2bd43
-        );
-    color:#111;
-}
-
-.notice{
-    padding:13px 15px;
-    margin-bottom:15px;
-    border:1px solid var(--border);
-    border-radius:12px;
-}
-
-.error{
-    color:#ffbac4;
-    background:rgba(255,80,105,.09);
-    border-color:rgba(255,80,105,.23);
-}
-
-.success{
-    color:#9df9ce;
-    background:rgba(36,233,154,.08);
-    border-color:rgba(36,233,154,.22);
-}
-
-.table{
+.tablewrap{
     overflow:auto;
 }
 
-.table table{
+.table{
     width:100%;
     border-collapse:collapse;
 }
 
 .table th,
 .table td{
-    padding:13px;
-    border-bottom:1px solid var(--border);
     text-align:left;
+    padding:13px;
+    border-bottom:1px solid var(--line);
     white-space:nowrap;
 }
 
 .table th{
-    color:#93a5bd;
-    font-size:11px;
-    text-transform:uppercase;
+    color:var(--muted);
+    font-size:12px;
 }
 
-.badge{
-    display:inline-flex;
-    padding:6px 10px;
-    border-radius:999px;
-    font-size:11px;
-    font-weight:900;
-    border:1px solid transparent;
+.notice{
+    padding:12px 14px;
+    border:1px solid #244a5a;
+    background:#071922;
+    border-radius:12px;
+    margin-bottom:15px;
 }
 
-.pending{
-    color:#ffd978;
-    background:rgba(255,200,87,.08);
-    border-color:rgba(255,200,87,.2);
-}
-
-.accepted{
-    color:#80f1b8;
-    background:rgba(36,233,154,.08);
-    border-color:rgba(36,233,154,.2);
-}
-
-.progress{
-    color:#79efff;
-    background:rgba(0,229,255,.08);
-    border-color:rgba(0,229,255,.2);
-}
-
-.completed{
-    color:#80f1b8;
-    background:rgba(36,233,154,.08);
-    border-color:rgba(36,233,154,.2);
-}
-
-.declined{
-    color:#ff9eac;
-    background:rgba(255,80,105,.08);
-    border-color:rgba(255,80,105,.2);
+.error{
+    border-color:#6d2336;
+    background:#220b13;
+    color:#ffb0bf;
 }
 
 .chat{
     display:flex;
     flex-direction:column;
-    min-height:540px;
-}
-
-.chatbox{
-    flex:1;
-    max-height:520px;
-    overflow:auto;
-    padding:18px;
-    display:flex;
-    flex-direction:column;
     gap:10px;
-}
-
-.msg{
-    max-width:82%;
-    padding:11px 13px;
-    border:1px solid var(--border);
-    border-radius:14px;
-    background:#0a0f16;
-}
-
-.msg.admin{
-    align-self:flex-end;
-    background:rgba(109,124,255,.12);
-    border-color:rgba(109,124,255,.22);
-}
-
-.msg.client{
-    align-self:flex-start;
-}
-
-.msg.system{
-    align-self:center;
-    max-width:92%;
-    background:rgba(0,229,255,.06);
-    border-color:rgba(0,229,255,.14);
-    text-align:center;
-}
-
-.who{
-    margin-bottom:5px;
-    color:var(--muted);
-    font-size:10px;
-    font-weight:900;
-    letter-spacing:.8px;
-    text-transform:uppercase;
-}
-
-.time{
-    margin-top:6px;
-    color:#69788d;
-    font-size:10px;
-}
-
-.chatform{
-    display:flex;
-    gap:9px;
-    padding:13px;
-    border-top:1px solid var(--border);
-}
-
-.chatform input{
-    flex:1;
-}
-
-.finding{
-    padding:20px;
+    max-height:440px;
+    overflow:auto;
     margin-bottom:12px;
 }
 
-.finding h3{
-    margin:4px 0 8px;
+.msg{
+    padding:12px;
+    border:1px solid var(--line);
+    border-radius:13px;
+    background:#0a0f1b;
+}
+
+.msg.admin{
+    border-color:#244c62;
+}
+
+.msg.client{
+    border-color:#3d316a;
+}
+
+.msg.system{
+    border-color:#4e4b1c;
+}
+
+.msg b{
+    font-size:12px;
+}
+
+.finding{
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding:15px;
+    margin:10px 0;
 }
 
 .sev{
     font-weight:900;
 }
 
-.sev.critical{
-    color:#ff6176;
+.sev-HIGH,
+.sev-CRITICAL{
+    color:#ff6688;
 }
 
-.sev.high{
-    color:#ff8d67;
+.sev-MEDIUM{
+    color:var(--yellow);
 }
 
-.sev.medium{
-    color:#ffd36d;
+.sev-LOW{
+    color:var(--cyan);
 }
 
-.sev.low{
-    color:#5fe6a4;
-}
-
-.sev.info{
-    color:#77ddff;
-}
-
-.head{
-    display:flex;
-    justify-content:space-between;
-    align-items:flex-start;
-    gap:15px;
-    margin-bottom:20px;
-}
-
-.empty{
-    text-align:center;
-    padding:30px;
+.sev-INFO{
     color:var(--muted);
+}
+
+.toastbox{
+    position:fixed;
+    right:18px;
+    bottom:18px;
+    z-index:100;
+    display:grid;
+    gap:10px;
+    width:min(380px,calc(100% - 36px));
+}
+
+.toast{
+    background:#0c1422;
+    border:1px solid var(--cyan);
+    padding:14px;
+    border-radius:14px;
+    box-shadow:0 12px 45px #0009;
+}
+
+.pill{
+    display:inline-block;
+    padding:4px 8px;
+    border-radius:999px;
+    background:#111827;
+    color:var(--muted);
+    font-size:11px;
+}
+
+.check{
+    display:flex;
+    gap:9px;
+    align-items:flex-start;
 }
 
 .footer{
     text-align:center;
-    padding:52px 0;
-    color:#66768d;
-    font-size:12px;
+    color:var(--muted);
+    padding:45px 0;
 }
 
 .login{
-    width:min(480px,92%);
-    margin:82px auto;
+    width:min(480px,100%);
+    margin:70px auto;
 }
 
-.login .panel{
-    padding:28px;
+.mono{
+    font-family:
+        ui-monospace,
+        SFMono-Regular,
+        Consolas,
+        monospace;
+    white-space:pre-wrap;
 }
 
-.client-item{
-    padding:18px;
-    border-bottom:1px solid var(--border);
+.notifbar{
     display:flex;
     justify-content:space-between;
-    gap:20px;
     align-items:center;
-}
-
-.client-item:last-child{
-    border-bottom:0;
-}
-
-.client-main{
-    min-width:0;
-}
-
-.client-name{
-    font-size:17px;
-    font-weight:900;
-}
-
-.client-target{
-    font-size:12px;
-    color:var(--muted);
-    overflow:hidden;
-    text-overflow:ellipsis;
-}
-
-.client-meta{
-    display:flex;
-    gap:8px;
+    gap:12px;
     flex-wrap:wrap;
-    margin-top:8px;
 }
 
-@media(max-width:900px){
-
-    .hero-grid,
-    .two{
-        grid-template-columns:1fr;
-    }
-
-    .cards{
-        grid-template-columns:1fr;
-    }
-
-    .kpis{
-        grid-template-columns:repeat(2,1fr);
-    }
-
-    .client-item{
-        align-items:flex-start;
-        flex-direction:column;
-    }
+.empty{
+    padding:30px;
+    text-align:center;
+    color:var(--muted);
 }
 
-@media(max-width:650px){
-
-    .links{
-        display:none;
-    }
-
-    .grid{
+@media(max-width:700px){
+    .row{
         grid-template-columns:1fr;
     }
 
-    .full{
-        grid-column:auto;
+    .nav{
+        padding:13px 4%;
     }
 
-    .stats{
-        grid-template-columns:1fr;
+    .navlinks{
+        gap:8px;
     }
 
-    .hero h1{
-        letter-spacing:-2px;
+    .wrap{
+        margin-top:22px;
     }
 
-    .kpis{
-        grid-template-columns:1fr 1fr;
+    .table th,
+    .table td{
+        padding:10px;
     }
 }
 '''
 
 
-PAGE = r'''
+# ============================================================
+# SHELL
+# ============================================================
+
+SHELL = r'''
 <!doctype html>
 
 <html lang="en">
@@ -795,8 +526,13 @@ PAGE = r'''
     content="width=device-width,initial-scale=1"
 >
 
+<meta
+    name="theme-color"
+    content="#060812"
+>
+
 <title>
-    {{ title|e }} — {{ app_name|e }}
+    {{ title }} · MATIA // SECURITY CHECK
 </title>
 
 <style>
@@ -807,213 +543,2184 @@ PAGE = r'''
 
 <body>
 
-<div class="top">
+<nav class="nav">
 
-    <div class="wrap nav">
+<a
+    class="brand"
+    href="{{ url_for('home') }}"
+>
+    MATIA
+    <span>// SECURITY CHECK</span>
+</a>
 
-        <a
-            class="brand"
-            href="{{ url_for('home') }}"
-        >
+<div class="navlinks">
 
-            <div class="logo">
-                M
-            </div>
+<a href="{{ url_for('new_request') }}">
+    Request
+</a>
 
-            <div>
+{% if session.get('admin') %}
 
-                MATIA // SECURITY
+<a href="{{ url_for('admin_dashboard') }}">
+    Admin
+</a>
 
-                <small>
-                    AUTHORIZED SECURITY CHECKS
-                </small>
+<a href="{{ url_for('admin_logout') }}">
+    Logout
+</a>
 
-            </div>
+{% else %}
 
-        </a>
+<a href="{{ url_for('admin_login') }}">
+    Admin
+</a>
 
-        <div class="links">
-
-            <a href="/">
-                Home
-            </a>
-
-            <a href="/request">
-                Request
-            </a>
-
-            <a href="/admin/login">
-                Admin
-            </a>
-
-        </div>
-
-    </div>
+{% endif %}
 
 </div>
 
-<main>
-{{ body|safe }}
+</nav>
+
+<main class="wrap">
+
+{{ content|safe }}
+
 </main>
 
-<div class="footer">
-    MATIA // SECURITY CHECK · Authorized Security Assessment Portal
-</div>
+<div
+    id="toastbox"
+    class="toastbox"
+></div>
 
-<script>
-{{ script|safe }}
-</script>
+<footer class="footer">
+    Authorized security assessments only
+    · MATIA // SECURITY CHECK
+</footer>
 
 </body>
-
 </html>
 '''
 
 
-def render_page(
-    title,
-    body,
-    script=""
-):
-    return render_template_string(
-        PAGE,
-        title=title,
-        app_name=APP_NAME,
-        css=CSS,
-        body=body,
-        script=script,
+# ============================================================
+# HOME
+# ============================================================
+
+HOME = r'''
+<section class="hero">
+
+<span class="pill">
+    AUTHORIZED SECURITY ASSESSMENT PORTAL
+</span>
+
+<h1>
+    MATIA
+    <span style="color:var(--cyan)">
+        // SECURITY CHECK
+    </span>
+</h1>
+
+<p>
+    Submit a website you own or are explicitly authorized
+    to test. Track the request, communicate securely with
+    the administrator, and receive published findings in
+    one portal.
+</p>
+
+<div class="actions">
+
+<a
+    class="btn primary"
+    href="{{ url_for('new_request') }}"
+>
+    Start Security Request →
+</a>
+
+<a
+    class="btn"
+    href="{{ url_for('admin_login') }}"
+>
+    Admin Console
+</a>
+
+</div>
+
+</section>
+
+<div class="grid">
+
+<div class="card">
+    <div class="stat">01</div>
+    <div class="muted">
+        Submit target + scope
+    </div>
+</div>
+
+<div class="card">
+    <div class="stat">02</div>
+    <div class="muted">
+        Admin reviews request
+    </div>
+</div>
+
+<div class="card">
+    <div class="stat">03</div>
+    <div class="muted">
+        Secure chat opens after approval
+    </div>
+</div>
+
+<div class="card">
+    <div class="stat">04</div>
+    <div class="muted">
+        Published findings + report
+    </div>
+</div>
+
+</div>
+'''
+
+
+# ============================================================
+# REQUEST FORM
+# ============================================================
+
+REQUEST_FORM = r'''
+<div class="card">
+
+<h1>
+    New Security Request
+</h1>
+
+<p class="muted">
+    Only submit targets you own or have explicit
+    authorization to assess.
+</p>
+
+{% with messages=get_flashed_messages() %}
+
+{% for m in messages %}
+
+<div class="notice error">
+    {{ m }}
+</div>
+
+{% endfor %}
+
+{% endwith %}
+
+<form
+    class="form"
+    method="post"
+>
+
+<div class="row">
+
+<div class="field">
+
+<label>
+    Your Name
+</label>
+
+<input
+    name="name"
+    required
+    maxlength="100"
+>
+
+</div>
+
+<div class="field">
+
+<label>
+    Your Email
+</label>
+
+<input
+    name="email"
+    type="email"
+    required
+    maxlength="180"
+>
+
+</div>
+
+</div>
+
+
+<div class="row">
+
+<div class="field">
+
+<label>
+    Web Name
+</label>
+
+<input
+    name="web_name"
+    required
+    maxlength="120"
+    placeholder="My Website"
+>
+
+</div>
+
+<div class="field">
+
+<label>
+    Web Target
+</label>
+
+<input
+    name="target"
+    type="url"
+    required
+    maxlength="500"
+    placeholder="https://example.com"
+>
+
+</div>
+
+</div>
+
+
+<div class="field">
+
+<label>
+    Authorized Scope
+</label>
+
+<textarea
+    name="scope"
+    required
+    maxlength="5000"
+    placeholder="Example: public website only; no DoS; no third-party services."
+></textarea>
+
+</div>
+
+
+<label class="check">
+
+<input
+    type="checkbox"
+    name="authorized"
+    value="yes"
+    required
+>
+
+<span>
+    I confirm that I own this target or have explicit
+    authorization to request a security assessment.
+</span>
+
+</label>
+
+
+<button
+    class="btn primary"
+    type="submit"
+>
+    Submit Security Request
+</button>
+
+</form>
+
+</div>
+'''
+
+
+# ============================================================
+# ADMIN LOGIN
+# ============================================================
+
+LOGIN = r'''
+<div class="login card">
+
+<h1>
+    Admin Console
+</h1>
+
+<p class="muted">
+    Authorized administrator access.
+</p>
+
+{% with messages=get_flashed_messages() %}
+
+{% for m in messages %}
+
+<div class="notice error">
+    {{ m }}
+</div>
+
+{% endfor %}
+
+{% endwith %}
+
+<form
+    class="form"
+    method="post"
+>
+
+<div class="field">
+
+<label>
+    Email
+</label>
+
+<input
+    name="email"
+    type="email"
+    value="{{ admin_email }}"
+    readonly
+    autocomplete="username"
+>
+
+</div>
+
+
+<div class="field">
+
+<label>
+    Password
+</label>
+
+<input
+    name="password"
+    type="password"
+    required
+    autocomplete="current-password"
+>
+
+</div>
+
+
+<button
+    class="btn primary"
+>
+    Sign in
+</button>
+
+</form>
+
+<p class="small muted">
+    Password is loaded from MATIA_ADMIN_PASSWORD
+    in the server environment.
+</p>
+
+</div>
+'''
+
+
+# ============================================================
+# ADMIN DASHBOARD
+# ============================================================
+
+ADMIN_DASH = r'''
+<div class="hero">
+
+<div class="notifbar">
+
+<div>
+
+<span class="pill">
+    ADMIN CONSOLE ONLINE
+</span>
+
+<h1>
+    Security Operations
+</h1>
+
+<p class="muted">
+    Review requests, open one client at a time,
+    manage assessments and receive real browser
+    notifications.
+</p>
+
+</div>
+
+<button
+    class="btn"
+    onclick="enableNotifications()"
+>
+    🔔 Enable Notifications
+</button>
+
+</div>
+
+</div>
+
+
+<div class="grid">
+
+<div class="card">
+
+<div
+    id="total"
+    class="stat"
+>
+    {{ stats.total }}
+</div>
+
+<div class="muted">
+    Total Clients
+</div>
+
+</div>
+
+
+<div class="card">
+
+<div
+    id="waiting"
+    class="stat"
+>
+    {{ stats.waiting }}
+</div>
+
+<div class="muted">
+    Waiting Review
+</div>
+
+</div>
+
+
+<div class="card">
+
+<div
+    id="active"
+    class="stat"
+>
+    {{ stats.active }}
+</div>
+
+<div class="muted">
+    Active
+</div>
+
+</div>
+
+
+<div class="card">
+
+<div
+    id="findings"
+    class="stat"
+>
+    {{ stats.findings }}
+</div>
+
+<div class="muted">
+    Findings
+</div>
+
+</div>
+
+</div>
+
+
+<div
+    class="card"
+    style="margin-top:18px"
+>
+
+<h2>
+    Client Queue
+</h2>
+
+<div class="tablewrap">
+
+<table class="table">
+
+<thead>
+
+<tr>
+
+<th>ID</th>
+<th>Client</th>
+<th>Website</th>
+<th>Target</th>
+<th>Status</th>
+<th>Created</th>
+<th></th>
+
+</tr>
+
+</thead>
+
+<tbody id="queue">
+
+{% for r in rows %}
+
+<tr>
+
+<td>
+    #{{ r.id }}
+</td>
+
+<td>
+    {{ r.name|e }}
+    <br>
+    <span class="small muted">
+        {{ r.email|e }}
+    </span>
+</td>
+
+<td>
+    {{ r.web_name|e }}
+</td>
+
+<td>
+    {{ r.target|e }}
+</td>
+
+<td>
+
+<span
+    class="status
+    {{ r.status|lower|replace(' ','-') }}"
+>
+    {{ r.status }}
+</span>
+
+</td>
+
+<td class="small">
+    {{ r.created_at }}
+</td>
+
+<td>
+
+<a
+    class="btn"
+    href="{{ url_for('admin_request', rid=r.id) }}"
+>
+    Open Client →
+</a>
+
+</td>
+
+</tr>
+
+{% else %}
+
+<tr>
+
+<td
+    colspan="7"
+    class="empty"
+>
+    No clients yet.
+</td>
+
+</tr>
+
+{% endfor %}
+
+</tbody>
+
+</table>
+
+</div>
+
+</div>
+
+
+<script>
+
+const adminLastKey =
+    'matia_admin_last_notification';
+
+let adminBaseline = null;
+
+
+async function enableNotifications(){
+
+    if(!('Notification' in window)){
+
+        toast(
+            'This browser does not support notifications'
+        );
+
+        return;
+    }
+
+    const p =
+        await Notification.requestPermission();
+
+    toast(
+        p === 'granted'
+        ? 'Browser notifications enabled'
+        : 'Notification permission was not granted'
+    );
+}
+
+
+function toast(t){
+
+    const box =
+        document.getElementById('toastbox');
+
+    const x =
+        document.createElement('div');
+
+    x.className = 'toast';
+
+    x.textContent = t;
+
+    box.appendChild(x);
+
+    setTimeout(
+        () => x.remove(),
+        5000
+    );
+}
+
+
+function notify(n){
+
+    if(
+        'Notification' in window &&
+        Notification.permission === 'granted'
+    ){
+
+        new Notification(
+            n.title,
+            {
+                body:n.body,
+                tag:'matia-'+n.id
+            }
+        );
+
+    }
+
+    toast(
+        n.title + ': ' + n.body
+    );
+}
+
+
+async function pollAdmin(){
+
+    try{
+
+        const r =
+            await fetch(
+                '{{ url_for("api_admin_dashboard") }}?t='
+                + Date.now(),
+                {
+                    cache:'no-store'
+                }
+            );
+
+        const d =
+            await r.json();
+
+        document.getElementById('total')
+            .textContent = d.stats.total;
+
+        document.getElementById('waiting')
+            .textContent = d.stats.waiting;
+
+        document.getElementById('active')
+            .textContent = d.stats.active;
+
+        document.getElementById('findings')
+            .textContent = d.stats.findings;
+
+
+        if(adminBaseline === null){
+
+            adminBaseline =
+                d.latest_notification_id;
+
+            localStorage.setItem(
+                adminLastKey,
+                String(adminBaseline)
+            );
+
+        }
+        else if(
+            d.latest_notification_id >
+            Number(
+                localStorage.getItem(
+                    adminLastKey
+                ) || 0
+            )
+        ){
+
+            const n =
+                await fetch(
+                    '{{ url_for("api_admin_notifications") }}?since='
+                    + Number(
+                        localStorage.getItem(
+                            adminLastKey
+                        ) || 0
+                    )
+                    + '&t='
+                    + Date.now(),
+                    {
+                        cache:'no-store'
+                    }
+                )
+                .then(x => x.json());
+
+
+            for(
+                const item of n.notifications
+            ){
+
+                if(
+                    item.id >
+                    Number(
+                        localStorage.getItem(
+                            adminLastKey
+                        ) || 0
+                    )
+                ){
+
+                    notify(item);
+
+                }
+
+                localStorage.setItem(
+                    adminLastKey,
+                    String(item.id)
+                );
+
+            }
+
+        }
+
+    }
+    catch(e){
+
+    }
+
+}
+
+
+setInterval(
+    pollAdmin,
+    2500
+);
+
+pollAdmin();
+
+</script>
+'''
+
+
+# ============================================================
+# ADMIN DETAIL
+# ============================================================
+
+ADMIN_DETAIL = r'''
+<div class="actions">
+
+<a
+    class="btn"
+    href="{{ url_for('admin_dashboard') }}"
+>
+    ← Queue
+</a>
+
+<a
+    class="btn"
+    href="{{ url_for('admin_report', rid=r.id) }}"
+>
+    Full Report
+</a>
+
+<button
+    class="btn"
+    onclick="enableNotifications()"
+>
+    🔔 Notifications
+</button>
+
+</div>
+
+
+<div class="grid">
+
+<div class="card">
+
+<span class="pill">
+    REQUEST #{{ r.id }}
+</span>
+
+<h1>
+    {{ r.web_name|e }}
+</h1>
+
+<p class="muted">
+    {{ r.target|e }}
+</p>
+
+<p>
+
+<span
+    class="status
+    {{ r.status|lower|replace(' ','-') }}"
+>
+    {{ r.status }}
+</span>
+
+</p>
+
+<p>
+    <b>Client:</b>
+    {{ r.name|e }}
+    ·
+    {{ r.email|e }}
+</p>
+
+<p>
+    <b>Scope:</b>
+    <br>
+    {{ r.scope|e }}
+</p>
+
+<p class="small muted">
+    Created {{ r.created_at }}
+    ·
+    Updated {{ r.updated_at }}
+</p>
+
+
+<div class="actions">
+
+{% if r.status == 'PENDING' %}
+
+<form
+    method="post"
+    action="{{ url_for('admin_decision',rid=r.id) }}"
+>
+
+<input
+    type="hidden"
+    name="csrf"
+    value="{{ csrf }}"
+>
+
+<input
+    type="hidden"
+    name="action"
+    value="ACCEPT"
+>
+
+<button
+    class="btn green"
+>
+    ✓ Accept Client
+</button>
+
+</form>
+
+
+<form
+    method="post"
+    action="{{ url_for('admin_decision',rid=r.id) }}"
+>
+
+<input
+    type="hidden"
+    name="csrf"
+    value="{{ csrf }}"
+>
+
+<input
+    type="hidden"
+    name="action"
+    value="DECLINE"
+>
+
+<button
+    class="btn red"
+>
+    ✕ Decline
+</button>
+
+</form>
+
+
+{% elif r.status == 'ACCEPTED' %}
+
+<form
+    method="post"
+    action="{{ url_for('admin_decision',rid=r.id) }}"
+>
+
+<input
+    type="hidden"
+    name="csrf"
+    value="{{ csrf }}"
+>
+
+<input
+    type="hidden"
+    name="action"
+    value="START"
+>
+
+<button
+    class="btn primary"
+>
+    ▶ Start Assessment
+</button>
+
+</form>
+
+
+{% elif r.status == 'IN PROGRESS' %}
+
+<form
+    method="post"
+    action="{{ url_for('admin_decision',rid=r.id) }}"
+>
+
+<input
+    type="hidden"
+    name="csrf"
+    value="{{ csrf }}"
+>
+
+<input
+    type="hidden"
+    name="action"
+    value="COMPLETE"
+>
+
+<button
+    class="btn green"
+>
+    ✓ Mark Completed
+</button>
+
+</form>
+
+
+{% elif r.status == 'DECLINED' %}
+
+<form
+    method="post"
+    action="{{ url_for('admin_decision',rid=r.id) }}"
+>
+
+<input
+    type="hidden"
+    name="csrf"
+    value="{{ csrf }}"
+>
+
+<input
+    type="hidden"
+    name="action"
+    value="REOPEN"
+>
+
+<button
+    class="btn yellow"
+>
+    ↻ Reopen
+</button>
+
+</form>
+
+{% endif %}
+
+</div>
+
+
+<p class="small muted">
+
+Client portal:
+
+<a
+    href="{{ client_link }}"
+    target="_blank"
+>
+    open client portal
+</a>
+
+</p>
+
+</div>
+
+
+<div class="card">
+
+<h2>
+    Secure Chat
+</h2>
+
+<div
+    id="chat"
+    class="chat"
+>
+
+{% for m in messages %}
+
+<div
+    class="msg {{ m.sender|lower }}"
+>
+
+<b>
+    {{ m.sender }}
+</b>
+
+<div>
+    {{ m.message|e }}
+</div>
+
+<span class="small muted">
+    {{ m.created_at }}
+</span>
+
+</div>
+
+{% else %}
+
+<div class="empty">
+    No messages yet.
+</div>
+
+{% endfor %}
+
+</div>
+
+
+{% if r.status in ['ACCEPTED','IN PROGRESS','COMPLETED'] %}
+
+<form
+    id="chatForm"
+    class="actions"
+>
+
+<input
+    id="chatInput"
+    style="
+        flex:1;
+        min-width:220px;
+        background:#070b15;
+        border:1px solid var(--line);
+        border-radius:12px;
+        color:var(--text);
+        padding:12px
+    "
+    maxlength="4000"
+    placeholder="Message client..."
+>
+
+<button
+    class="btn primary"
+>
+    Send
+</button>
+
+</form>
+
+{% else %}
+
+<div class="notice">
+    Chat is locked until the request is accepted.
+</div>
+
+{% endif %}
+
+</div>
+
+</div>
+
+
+<div
+    class="card"
+    style="margin-top:18px"
+>
+
+<h2>
+    Publish Finding
+</h2>
+
+
+{% if r.status in ['ACCEPTED','IN PROGRESS','COMPLETED'] %}
+
+<form
+    class="form"
+    method="post"
+    action="{{ url_for('admin_finding',rid=r.id) }}"
+>
+
+<input
+    type="hidden"
+    name="csrf"
+    value="{{ csrf }}"
+>
+
+
+<div class="row">
+
+<div class="field">
+
+<label>
+    Title
+</label>
+
+<input
+    name="title"
+    required
+    maxlength="200"
+>
+
+</div>
+
+
+<div class="field">
+
+<label>
+    Severity
+</label>
+
+<select name="severity">
+
+<option>INFO</option>
+<option>LOW</option>
+<option>MEDIUM</option>
+<option>HIGH</option>
+<option>CRITICAL</option>
+
+</select>
+
+</div>
+
+</div>
+
+
+<div class="field">
+
+<label>
+    Description
+</label>
+
+<textarea
+    name="description"
+    required
+></textarea>
+
+</div>
+
+
+<div class="field">
+
+<label>
+    Evidence
+</label>
+
+<textarea
+    name="evidence"
+></textarea>
+
+</div>
+
+
+<div class="field">
+
+<label>
+    Recommendation
+</label>
+
+<textarea
+    name="recommendation"
+></textarea>
+
+</div>
+
+
+<button
+    class="btn primary"
+>
+    Publish Finding
+</button>
+
+</form>
+
+{% else %}
+
+<div class="notice">
+    Accept the client before publishing findings.
+</div>
+
+{% endif %}
+
+</div>
+
+
+<div
+    class="card"
+    style="margin-top:18px"
+>
+
+<h2>
+    Published Findings
+</h2>
+
+
+{% for f in findings %}
+
+<div class="finding">
+
+<span class="sev sev-{{ f.severity }}">
+    {{ f.severity }}
+</span>
+
+<h3>
+    {{ f.title|e }}
+</h3>
+
+<p>
+    {{ f.description|e }}
+</p>
+
+
+{% if f.evidence %}
+
+<p>
+    <b>Evidence</b>
+</p>
+
+<div class="mono">
+    {{ f.evidence|e }}
+</div>
+
+{% endif %}
+
+
+{% if f.recommendation %}
+
+<p>
+    <b>Recommendation:</b>
+    {{ f.recommendation|e }}
+</p>
+
+{% endif %}
+
+<span class="small muted">
+    {{ f.created_at }}
+</span>
+
+</div>
+
+{% else %}
+
+<div class="empty">
+    No findings published.
+</div>
+
+{% endfor %}
+
+</div>
+
+
+<script>
+
+function toast(t){
+
+    const box =
+        document.getElementById('toastbox');
+
+    const x =
+        document.createElement('div');
+
+    x.className = 'toast';
+
+    x.textContent = t;
+
+    box.appendChild(x);
+
+    setTimeout(
+        () => x.remove(),
+        5000
+    );
+
+}
+
+
+async function enableNotifications(){
+
+    if(!('Notification' in window)){
+
+        toast(
+            'Notifications are not supported'
+        );
+
+        return;
+    }
+
+    const p =
+        await Notification.requestPermission();
+
+    toast(
+        p === 'granted'
+        ? 'Browser notifications enabled'
+        : 'Permission denied'
+    );
+
+}
+
+
+const rid =
+    {{ r.id|tojson }};
+
+let lastUpdate =
+    {{ r.updated_at|tojson }};
+
+let lastMsg =
+    {{ messages[-1].id if messages else 0 }};
+
+
+async function poll(){
+
+    try{
+
+        const d =
+            await fetch(
+                '/api/admin/request/' +
+                rid +
+                '?t=' +
+                Date.now(),
+                {
+                    cache:'no-store'
+                }
+            )
+            .then(x => x.json());
+
+
+        if(
+            d.updated_at !== lastUpdate ||
+            d.latest_message_id > lastMsg
+        ){
+
+            location.reload();
+
+        }
+
+    }
+    catch(e){
+
+    }
+
+}
+
+
+{% if r.status in ['ACCEPTED','IN PROGRESS','COMPLETED'] %}
+
+document
+    .getElementById('chatForm')
+    .addEventListener(
+        'submit',
+        async function(e){
+
+            e.preventDefault();
+
+            const input =
+                document.getElementById(
+                    'chatInput'
+                );
+
+            const message =
+                input.value.trim();
+
+            if(!message){
+                return;
+            }
+
+            const fd =
+                new FormData();
+
+            fd.append(
+                'csrf',
+                {{ csrf|tojson }}
+            );
+
+            fd.append(
+                'message',
+                message
+            );
+
+
+            const res =
+                await fetch(
+                    '{{ url_for("admin_message",rid=r.id) }}',
+                    {
+                        method:'POST',
+                        body:fd
+                    }
+                );
+
+
+            if(res.ok){
+
+                input.value = '';
+
+                location.reload();
+
+            }
+            else{
+
+                toast(
+                    'Message failed'
+                );
+
+            }
+
+        }
+    );
+
+{% endif %}
+
+
+setInterval(
+    poll,
+    2500
+);
+
+</script>
+'''
+
+
+# ============================================================
+# CLIENT STATUS
+# ============================================================
+
+CLIENT_STATUS = r'''
+<div class="actions">
+
+<a
+    class="btn"
+    href="{{ url_for('home') }}"
+>
+    ← Home
+</a>
+
+<button
+    class="btn"
+    onclick="enableNotifications()"
+>
+    🔔 Enable Notifications
+</button>
+
+<a
+    class="btn"
+    href="{{ report_link }}"
+>
+    Full Report
+</a>
+
+</div>
+
+
+<div class="card">
+
+<span class="pill">
+    REQUEST #{{ r.id }}
+</span>
+
+<h1>
+    {{ r.web_name|e }}
+</h1>
+
+<p class="muted">
+    {{ r.target|e }}
+</p>
+
+<span
+    id="status"
+    class="status
+    {{ r.status|lower|replace(' ','-') }}"
+>
+    {{ r.status }}
+</span>
+
+
+<div
+    class="grid"
+    style="margin-top:18px"
+>
+
+<div>
+
+<b>
+    Client
+</b>
+
+<br>
+
+{{ r.name|e }}
+
+<br>
+
+<span class="muted">
+    {{ r.email|e }}
+</span>
+
+</div>
+
+
+<div>
+
+<b>
+    Scope
+</b>
+
+<br>
+
+{{ r.scope|e }}
+
+</div>
+
+</div>
+
+</div>
+
+
+<div
+    class="grid"
+    style="margin-top:18px"
+>
+
+
+<div class="card">
+
+<h2>
+    Secure Chat
+</h2>
+
+
+<div
+    id="chat"
+    class="chat"
+>
+
+{% for m in messages %}
+
+<div
+    class="msg {{ m.sender|lower }}"
+>
+
+<b>
+    {{ m.sender }}
+</b>
+
+<div>
+    {{ m.message|e }}
+</div>
+
+<span class="small muted">
+    {{ m.created_at }}
+</span>
+
+</div>
+
+{% else %}
+
+<div class="empty">
+    No messages yet.
+</div>
+
+{% endfor %}
+
+</div>
+
+
+{% if r.status in ['ACCEPTED','IN PROGRESS','COMPLETED'] %}
+
+<form
+    id="chatForm"
+    class="actions"
+>
+
+<input
+    id="chatInput"
+    style="
+        flex:1;
+        min-width:200px;
+        background:#070b15;
+        border:1px solid var(--line);
+        border-radius:12px;
+        color:var(--text);
+        padding:12px
+    "
+    maxlength="4000"
+    placeholder="Message administrator..."
+>
+
+<button
+    class="btn primary"
+>
+    Send
+</button>
+
+</form>
+
+{% else %}
+
+<div class="notice">
+
+{{
+
+'Chat opens after admin approval.'
+
+if r.status == 'PENDING'
+
+else
+
+'Chat is locked because this request was declined.'
+
+}}
+
+</div>
+
+{% endif %}
+
+</div>
+
+
+<div class="card">
+
+<h2>
+    Assessment
+</h2>
+
+<p>
+    Your request is currently
+    <b>{{ r.status }}</b>.
+</p>
+
+<p class="muted">
+    You will receive a notification when the
+    administrator changes the request or publishes
+    a finding.
+</p>
+
+
+<div class="grid">
+
+<div>
+
+<b>
+    Created
+</b>
+
+<br>
+
+{{ r.created_at }}
+
+</div>
+
+
+<div>
+
+<b>
+    Updated
+</b>
+
+<br>
+
+<span id="updated">
+    {{ r.updated_at }}
+</span>
+
+</div>
+
+</div>
+
+</div>
+
+</div>
+
+
+<div
+    class="card"
+    style="margin-top:18px"
+>
+
+<h2>
+    Published Findings
+</h2>
+
+
+{% for f in findings %}
+
+<div class="finding">
+
+<span class="sev sev-{{ f.severity }}">
+    {{ f.severity }}
+</span>
+
+<h3>
+    {{ f.title|e }}
+</h3>
+
+<p>
+    {{ f.description|e }}
+</p>
+
+
+{% if f.evidence %}
+
+<p>
+    <b>Evidence</b>
+</p>
+
+<div class="mono">
+    {{ f.evidence|e }}
+</div>
+
+{% endif %}
+
+
+{% if f.recommendation %}
+
+<p>
+    <b>Recommendation:</b>
+    {{ f.recommendation|e }}
+</p>
+
+{% endif %}
+
+</div>
+
+{% else %}
+
+<div class="empty">
+    No findings have been published yet.
+</div>
+
+{% endfor %}
+
+</div>
+
+
+<script>
+
+const rid =
+    {{ r.id|tojson }};
+
+const token =
+    {{ token|tojson }};
+
+let lastUpdate =
+    {{ r.updated_at|tojson }};
+
+let lastNotif =
+    Number(
+        localStorage.getItem(
+            'matia_client_notif_' + rid
+        ) || 0
+    );
+
+
+function toast(t){
+
+    const box =
+        document.getElementById(
+            'toastbox'
+        );
+
+    const x =
+        document.createElement(
+            'div'
+        );
+
+    x.className = 'toast';
+
+    x.textContent = t;
+
+    box.appendChild(x);
+
+    setTimeout(
+        () => x.remove(),
+        5000
+    );
+
+}
+
+
+async function enableNotifications(){
+
+    if(
+        !('Notification' in window)
+    ){
+
+        toast(
+            'Notifications are not supported'
+        );
+
+        return;
+    }
+
+    const p =
+        await Notification.requestPermission();
+
+    toast(
+        p === 'granted'
+        ? 'Browser notifications enabled'
+        : 'Permission denied'
+    );
+
+}
+
+
+function notify(n){
+
+    toast(
+        n.title +
+        ': ' +
+        n.body
+    );
+
+
+    if(
+        'Notification' in window &&
+        Notification.permission === 'granted'
+    ){
+
+        new Notification(
+            n.title,
+            {
+                body:n.body,
+                tag:'matia-client-' + n.id
+            }
+        );
+
+    }
+
+}
+
+
+async function poll(){
+
+    try{
+
+        const d =
+            await fetch(
+                '/api/client/' +
+                rid +
+                '?token=' +
+                encodeURIComponent(token) +
+                '&t=' +
+                Date.now(),
+                {
+                    cache:'no-store'
+                }
+            )
+            .then(x => x.json());
+
+
+        if(
+            d.updated_at !== lastUpdate
+        ){
+
+            location.reload();
+
+            return;
+        }
+
+
+        const n =
+            await fetch(
+                '/api/client/' +
+                rid +
+                '/notifications?token=' +
+                encodeURIComponent(token) +
+                '&since=' +
+                lastNotif +
+                '&t=' +
+                Date.now(),
+                {
+                    cache:'no-store'
+                }
+            )
+            .then(x => x.json());
+
+
+        for(
+            const item of n.notifications
+        ){
+
+            if(item.id > lastNotif){
+
+                notify(item);
+
+                lastNotif =
+                    item.id;
+
+                localStorage.setItem(
+                    'matia_client_notif_' + rid,
+                    String(lastNotif)
+                );
+
+            }
+
+        }
+
+    }
+    catch(e){
+
+    }
+
+}
+
+
+{% if r.status in ['ACCEPTED','IN PROGRESS','COMPLETED'] %}
+
+document
+    .getElementById('chatForm')
+    .addEventListener(
+        'submit',
+        async function(e){
+
+            e.preventDefault();
+
+            const input =
+                document.getElementById(
+                    'chatInput'
+                );
+
+            const message =
+                input.value.trim();
+
+            if(!message){
+                return;
+            }
+
+
+            const fd =
+                new FormData();
+
+            fd.append(
+                'token',
+                token
+            );
+
+            fd.append(
+                'message',
+                message
+            );
+
+
+            const res =
+                await fetch(
+                    '/status/' +
+                    rid +
+                    '/message',
+                    {
+                        method:'POST',
+                        body:fd
+                    }
+                );
+
+
+            if(res.ok){
+
+                input.value = '';
+
+                location.reload();
+
+            }
+            else{
+
+                toast(
+                    'Message failed'
+                );
+
+            }
+
+        }
+    );
+
+{% endif %}
+
+
+setInterval(
+    poll,
+    2500
+);
+
+poll();
+
+</script>
+'''
+
+
+# ============================================================
+# REPORT
+# ============================================================
+
+REPORT = r'''
+<div class="actions">
+
+<a
+    class="btn"
+    href="{{ back_url }}"
+>
+    ← Back
+</a>
+
+<button
+    class="btn"
+    onclick="window.print()"
+>
+    Print Report
+</button>
+
+</div>
+
+
+<div class="card">
+
+<span class="pill">
+    SECURITY ASSESSMENT REPORT
+</span>
+
+<h1>
+    {{ r.web_name|e }}
+</h1>
+
+<p>
+    <b>Target:</b>
+    {{ r.target|e }}
+</p>
+
+<p>
+    <b>Client:</b>
+    {{ r.name|e }}
+    ·
+    {{ r.email|e }}
+</p>
+
+<p>
+    <b>Status:</b>
+    {{ r.status }}
+</p>
+
+<p>
+    <b>Authorized Scope:</b>
+    <br>
+    {{ r.scope|e }}
+</p>
+
+<p class="small muted">
+    Request #{{ r.id }}
+    ·
+    Updated {{ r.updated_at }}
+</p>
+
+</div>
+
+
+<div
+    class="card"
+    style="margin-top:18px"
+>
+
+<h2>
+    Findings
+</h2>
+
+
+{% for f in findings %}
+
+<div class="finding">
+
+<span class="sev sev-{{ f.severity }}">
+    {{ f.severity }}
+</span>
+
+<h3>
+    {{ f.title|e }}
+</h3>
+
+<p>
+    {{ f.description|e }}
+</p>
+
+
+{% if f.evidence %}
+
+<p>
+    <b>Evidence</b>
+</p>
+
+<div class="mono">
+    {{ f.evidence|e }}
+</div>
+
+{% endif %}
+
+
+{% if f.recommendation %}
+
+<p>
+    <b>Recommendation</b>
+    <br>
+    {{ f.recommendation|e }}
+</p>
+
+{% endif %}
+
+</div>
+
+{% else %}
+
+<div class="empty">
+    No published findings.
+</div>
+
+{% endfor %}
+
+</div>
+'''
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+def now():
+    return datetime.now(
+        timezone.utc
+    ).isoformat(
+        timespec="seconds"
     )
 
 
 def db():
 
-    connection = sqlite3.connect(
-        DB_FILE,
-        timeout=20
+    con = sqlite3.connect(
+        DB_PATH,
+        timeout=15
     )
 
-    connection.row_factory = sqlite3.Row
+    con.row_factory = sqlite3.Row
 
-    return connection
-
-
-def now():
-    return datetime.utcnow().strftime(
-        "%Y-%m-%d %H:%M:%S UTC"
+    con.execute(
+        "PRAGMA foreign_keys=ON"
     )
 
-
-def esc(value):
-    return html.escape(
-        str(value or ""),
-        quote=True
-    )
-
-
-def valid_target(target):
-
-    try:
-
-        parsed = urlparse(
-            target.strip()
-        )
-
-        return (
-            parsed.scheme
-            in (
-                "http",
-                "https"
-            )
-            and bool(
-                parsed.netloc
-            )
-        )
-
-    except Exception:
-
-        return False
-
-
-def get_request(request_id):
-
-    connection = db()
-
-    row = connection.execute(
-        """
-        SELECT *
-        FROM requests
-        WHERE id=?
-        """,
-        (
-            request_id,
-        )
-    ).fetchone()
-
-    connection.close()
-
-    return row
-
-
-def client_authorized(
-    request_id,
-    token
-):
-
-    if not token:
-        return False
-
-    connection = db()
-
-    row = connection.execute(
-        """
-        SELECT id
-        FROM requests
-        WHERE id=?
-        AND client_token=?
-        """,
-        (
-            request_id,
-            token
-        )
-    ).fetchone()
-
-    connection.close()
-
-    return row is not None
-
-
-def admin_required(
-    function
-):
-
-    @wraps(function)
-    def wrapper(*args, **kwargs):
-
-        if not session.get(
-            "admin_logged_in"
-        ):
-            return redirect(
-                url_for(
-                    "admin_login"
-                )
-            )
-
-        return function(
-            *args,
-            **kwargs
-        )
-
-    return wrapper
+    return con
 
 
 def init_db():
 
-    connection = db()
+    con = db()
 
-    connection.execute("""
+    con.executescript(
+        '''
         CREATE TABLE IF NOT EXISTS requests(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_token TEXT UNIQUE,
+            client_token TEXT,
             name TEXT NOT NULL,
             email TEXT NOT NULL,
             web_name TEXT NOT NULL,
@@ -1022,159 +2729,312 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'PENDING',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            client_ip TEXT
-        )
-    """)
+            client_ip TEXT DEFAULT ''
+        );
 
-    connection.execute("""
         CREATE TABLE IF NOT EXISTS messages(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id INTEGER NOT NULL,
             sender TEXT NOT NULL,
             message TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(request_id)
+                REFERENCES requests(id)
+                ON DELETE CASCADE
+        );
 
-    connection.execute("""
         CREATE TABLE IF NOT EXISTS findings(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             request_id INTEGER NOT NULL,
             title TEXT NOT NULL,
             severity TEXT NOT NULL,
             description TEXT NOT NULL,
-            evidence TEXT NOT NULL,
-            recommendation TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        )
-    """)
+            evidence TEXT DEFAULT '',
+            recommendation TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(request_id)
+                REFERENCES requests(id)
+                ON DELETE CASCADE
+        );
 
-    columns = {
-        row[1]
-        for row in connection.execute(
+        CREATE TABLE IF NOT EXISTS notifications(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id INTEGER NOT NULL,
+            audience TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(request_id)
+                REFERENCES requests(id)
+                ON DELETE CASCADE
+        );
+        '''
+    )
+
+    cols = {
+        r[1]
+        for r in con.execute(
             "PRAGMA table_info(requests)"
         ).fetchall()
     }
 
-    if "client_token" not in columns:
+    if "client_token" not in cols:
 
-        connection.execute(
+        con.execute(
+            "ALTER TABLE requests ADD COLUMN client_token TEXT"
+        )
+
+    if "web_name" not in cols:
+
+        con.execute(
+            "ALTER TABLE requests ADD COLUMN web_name TEXT DEFAULT 'Website'"
+        )
+
+    if "client_ip" not in cols:
+
+        con.execute(
+            "ALTER TABLE requests ADD COLUMN client_ip TEXT DEFAULT ''"
+        )
+
+    rows = con.execute(
+        """
+        SELECT id
+        FROM requests
+        WHERE client_token IS NULL
+        OR client_token=''
+        """
+    ).fetchall()
+
+    for r in rows:
+
+        con.execute(
             """
-            ALTER TABLE requests
-            ADD COLUMN client_token TEXT
-            """
+            UPDATE requests
+            SET client_token=?
+            WHERE id=?
+            """,
+            (
+                secrets.token_urlsafe(32),
+                r[0]
+            )
         )
 
-    if "web_name" not in columns:
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+        idx_notifications_audience_id
+        ON notifications(audience,id)
+        """
+    )
 
-        connection.execute(
-            """
-            ALTER TABLE requests
-            ADD COLUMN web_name TEXT
-            """
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS
+        idx_messages_request_id
+        ON messages(request_id,id)
+        """
+    )
+
+    con.commit()
+
+    con.close()
+
+
+init_db()
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def page(title, template, **ctx):
+
+    content = render_template_string(
+        template,
+        **ctx
+    )
+
+    return render_template_string(
+        SHELL,
+        title=title,
+        content=content,
+        css=CSS
+    )
+
+
+def csrf():
+
+    if "csrf" not in session:
+
+        session["csrf"] = (
+            secrets.token_urlsafe(24)
         )
 
-    connection.commit()
-    connection.close()
+    return session["csrf"]
 
 
-def render_messages(rows):
+def check_csrf():
 
-    if not rows:
+    token = request.form.get(
+        "csrf",
+        ""
+    )
 
-        return (
-            '<div class="empty">'
-            'No messages yet.'
-            '</div>'
+    if (
+        not token
+        or not hmac.compare_digest(
+            token,
+            session.get("csrf", "")
         )
+    ):
 
-    output = []
+        abort(403)
 
-    for row in rows:
 
-        sender = row["sender"]
+def admin_required(fn):
 
-        if sender not in (
-            "admin",
-            "client",
-            "system"
-        ):
-            sender = "system"
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
 
-        output.append(
-            '<div class="msg '
-            + sender
-            + '">'
+        if not session.get("admin"):
 
-            '<div class="who">'
-            + esc(row["sender"])
-            + '</div>'
+            return redirect(
+                url_for(
+                    "admin_login",
+                    next=request.path
+                )
+            )
 
-            '<div>'
-            + esc(row["message"])
-            + '</div>'
+        return fn(*args, **kwargs)
 
-            '<div class="time">'
-            + esc(row["created_at"])
-            + '</div>'
+    return wrapper
 
-            '</div>'
+
+def get_request(rid):
+
+    con = db()
+
+    r = con.execute(
+        "SELECT * FROM requests WHERE id=?",
+        (rid,)
+    ).fetchone()
+
+    con.close()
+
+    return r
+
+
+def valid_client(rid, token):
+
+    r = get_request(rid)
+
+    if (
+        not r
+        or not token
+        or not hmac.compare_digest(
+            str(r["client_token"]),
+            str(token)
         )
+    ):
 
-    return "".join(output)
+        abort(404)
+
+    return r
 
 
-def render_findings(rows):
+def notify(
+    con,
+    rid,
+    audience,
+    kind,
+    title,
+    body
+):
 
-    if not rows:
-
-        return (
-            '<div class="panel empty">'
-            'No findings published yet.'
-            '</div>'
+    con.execute(
+        """
+        INSERT INTO notifications(
+            request_id,
+            audience,
+            kind,
+            title,
+            body,
+            created_at
         )
-
-    output = []
-
-    for row in rows:
-
-        severity = (
-            row["severity"]
-            or "INFO"
-        ).lower()
-
-        output.append(
-            '<div class="panel finding">'
-
-            '<div class="sev '
-            + esc(severity)
-            + '">'
-            + esc(row["severity"])
-            + '</div>'
-
-            '<h3>'
-            + esc(row["title"])
-            + '</h3>'
-
-            '<p class="muted">'
-            '<b>Description</b><br>'
-            + esc(row["description"])
-            + '</p>'
-
-            '<p class="muted">'
-            '<b>Evidence</b><br>'
-            + esc(row["evidence"])
-            + '</p>'
-
-            '<p class="muted">'
-            '<b>Recommendation</b><br>'
-            + esc(row["recommendation"])
-            + '</p>'
-
-            '</div>'
+        VALUES(?,?,?,?,?,?)
+        """,
+        (
+            rid,
+            audience,
+            kind,
+            title,
+            body,
+            now()
         )
+    )
 
-    return "".join(output)
+
+def add_system(
+    con,
+    rid,
+    body
+):
+
+    con.execute(
+        """
+        INSERT INTO messages(
+            request_id,
+            sender,
+            message,
+            created_at
+        )
+        VALUES(?,?,?,?)
+        """,
+        (
+            rid,
+            "SYSTEM",
+            body,
+            now()
+        )
+    )
+
+
+def stats(con):
+
+    total = con.execute(
+        "SELECT COUNT(*) FROM requests"
+    ).fetchone()[0]
+
+    waiting = con.execute(
+        """
+        SELECT COUNT(*)
+        FROM requests
+        WHERE status='PENDING'
+        """
+    ).fetchone()[0]
+
+    active = con.execute(
+        """
+        SELECT COUNT(*)
+        FROM requests
+        WHERE status IN (
+            'ACCEPTED',
+            'IN PROGRESS'
+        )
+        """
+    ).fetchone()[0]
+
+    findings = con.execute(
+        "SELECT COUNT(*) FROM findings"
+    ).fetchone()[0]
+
+    return {
+        "total": total,
+        "waiting": waiting,
+        "active": active,
+        "findings": findings
+    }
 
 
 # ============================================================
@@ -1184,192 +3044,9 @@ def render_findings(rows):
 @app.route("/")
 def home():
 
-    body = r'''
-<section class="hero">
-
-    <div class="wrap hero-grid">
-
-        <div>
-
-            <div class="status">
-                <span class="dot"></span>
-                SECURITY PORTAL ONLINE
-            </div>
-
-            <h1>
-                Find the weak points
-                <span class="grad">
-                    before attackers do.
-                </span>
-            </h1>
-
-            <p class="muted">
-
-                MATIA // SECURITY CHECK is a
-                modern portal for authorized
-                website security assessments,
-                client communication and
-                structured reporting.
-
-            </p>
-
-            <div
-                class="actions"
-                style="margin-top:22px"
-            >
-
-                <a
-                    class="btn primary"
-                    href="/request"
-                >
-                    Start Security Check →
-                </a>
-
-                <a
-                    class="btn dark"
-                    href="#how"
-                >
-                    How it works
-                </a>
-
-            </div>
-
-            <div class="stats">
-
-                <div class="stat">
-                    <strong>01</strong>
-                    <span>Submit target</span>
-                </div>
-
-                <div class="stat">
-                    <strong>02</strong>
-                    <span>Review request</span>
-                </div>
-
-                <div class="stat">
-                    <strong>03</strong>
-                    <span>Receive report</span>
-                </div>
-
-            </div>
-
-        </div>
-
-        <div class="panel card">
-
-            <div class="status">
-                <span class="dot"></span>
-                LIVE SYSTEM
-            </div>
-
-            <h2>
-                Security Operations Portal
-            </h2>
-
-            <p class="muted">
-
-                Client queue,
-                accept/decline workflow,
-                private chat,
-                findings and reports.
-
-            </p>
-
-            <div class="code">
-
-                AUTHORIZATION → REQUIRED
-                <br>
-                SCOPE → CLIENT DEFINED
-                <br>
-                CHAT → AFTER ACCEPT
-                <br>
-                REPORT → PRIVATE PORTAL
-                <br>
-                ENGINE → FLASK + GUNICORN
-
-            </div>
-
-        </div>
-
-    </div>
-
-</section>
-
-
-<section
-    id="how"
-    class="section"
->
-
-    <div class="wrap">
-
-        <h2 class="title">
-            How it works
-        </h2>
-
-        <p class="sub">
-            A simple authorized workflow.
-        </p>
-
-        <div class="cards">
-
-            <div class="panel card">
-
-                <h3>
-                    01 · Submit
-                </h3>
-
-                <p class="muted">
-
-                    Client enters name, email,
-                    web name, target and
-                    authorized scope.
-
-                </p>
-
-            </div>
-
-            <div class="panel card">
-
-                <h3>
-                    02 · Decision
-                </h3>
-
-                <p class="muted">
-
-                    You open one client and
-                    choose ACCEPT or DECLINE.
-
-                </p>
-
-            </div>
-
-            <div class="panel card">
-
-                <h3>
-                    03 · Chat & Report
-                </h3>
-
-                <p class="muted">
-
-                    Accepted clients get
-                    the secure chat and
-                    report portal.
-
-                </p>
-
-            </div>
-
-        </div>
-
-    </div>
-
-</section>
-'''
-
-    return render_page(
+    return page(
         "Home",
-        body
+        HOME
     )
 
 
@@ -1382,8 +3059,6 @@ def home():
     methods=["GET", "POST"]
 )
 def new_request():
-
-    error = ""
 
     if request.method == "POST":
 
@@ -1412,813 +3087,394 @@ def new_request():
             ""
         ).strip()
 
-        authorization = request.form.get(
-            "authorization"
-        )
-
-        if not name:
-
-            error = "Name is required."
-
-        elif "@" not in email:
-
-            error = "Valid email is required."
-
-        elif not web_name:
-
-            error = "Web Name is required."
-
-        elif not valid_target(
-            target
+        if (
+            not all([
+                name,
+                email,
+                web_name,
+                target,
+                scope
+            ])
+            or request.form.get(
+                "authorized"
+            ) != "yes"
         ):
 
-            error = (
-                "Web Target must be a valid "
-                "HTTP or HTTPS URL."
+            flash(
+                "Complete every field and confirm authorization."
             )
 
-        elif not scope:
-
-            error = (
-                "Authorized Scope is required."
+            return redirect(
+                url_for("new_request")
             )
 
-        elif not authorization:
+        token = secrets.token_urlsafe(32)
+        timestamp = now()
 
-            error = (
-                "Authorization confirmation "
-                "is required."
+        con = db()
+
+        cur = con.execute(
+            """
+            INSERT INTO requests(
+                client_token,
+                name,
+                email,
+                web_name,
+                target,
+                scope,
+                status,
+                created_at,
+                updated_at,
+                client_ip
             )
-
-        else:
-
-            token = (
-                secrets.token_urlsafe(32)
-            )
-
-            timestamp = now()
-
-            connection = db()
-
-            cursor = connection.execute(
-                """
-                INSERT INTO requests(
-                    client_token,
-                    name,
-                    email,
-                    web_name,
-                    target,
-                    scope,
-                    status,
-                    created_at,
-                    updated_at,
-                    client_ip
-                )
-                VALUES(
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?,
-                    ?
-                )
-                """,
-                (
-                    token,
-                    name,
-                    email,
-                    web_name,
-                    target,
-                    scope,
-                    "PENDING",
-                    timestamp,
-                    timestamp,
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                token,
+                name,
+                email,
+                web_name,
+                target,
+                scope,
+                "PENDING",
+                timestamp,
+                timestamp,
+                request.headers.get(
+                    "X-Forwarded-For",
                     request.remote_addr or ""
                 )
             )
+        )
 
-            request_id = cursor.lastrowid
+        rid = cur.lastrowid
 
-            connection.commit()
-            connection.close()
+        add_system(
+            con,
+            rid,
+            "Your security request was submitted and is waiting for administrator review."
+        )
 
-            return redirect(
-                url_for(
-                    "client_status",
-                    request_id=request_id,
-                    token=token
-                )
+        notify(
+            con,
+            rid,
+            "admin",
+            "NEW_REQUEST",
+            "New security request",
+            f"{name} submitted request #{rid} for {web_name}."
+        )
+
+        con.commit()
+        con.close()
+
+        return redirect(
+            url_for(
+                "client_status",
+                rid=rid,
+                token=token
             )
+        )
 
-    body = r'''
-<section class="section">
-
-    <div class="wrap form">
-
-        <div
-            style="margin-bottom:22px"
-        >
-
-            <div class="status">
-
-                <span class="dot"></span>
-
-                NEW SECURITY REQUEST
-
-            </div>
-
-            <h1
-                class="title"
-                style="font-size:42px"
-            >
-                Start an authorized assessment
-            </h1>
-
-            <p class="sub">
-
-                Enter the website information
-                and define the exact scope.
-
-            </p>
-
-        </div>
-
-        <div class="panel card">
-
-            {% if error %}
-
-            <div class="notice error">
-                {{ error|e }}
-            </div>
-
-            {% endif %}
-
-            <form
-                method="POST"
-                action="/request"
-            >
-
-                <div class="grid">
-
-                    <div class="field">
-
-                        <label>
-                            Your Name
-                        </label>
-
-                        <input
-                            name="name"
-                            type="text"
-                            placeholder="Matia Becolli"
-                            autocomplete="name"
-                            required
-                        >
-
-                    </div>
-
-                    <div class="field">
-
-                        <label>
-                            Your Email
-                        </label>
-
-                        <input
-                            name="email"
-                            type="email"
-                            placeholder="you@example.com"
-                            autocomplete="email"
-                            required
-                        >
-
-                    </div>
-
-                    <div class="field">
-
-                        <label>
-                            Web Name
-                        </label>
-
-                        <input
-                            name="web_name"
-                            type="text"
-                            placeholder="My Website"
-                            required
-                        >
-
-                    </div>
-
-                    <div class="field">
-
-                        <label>
-                            Web Target
-                        </label>
-
-                        <input
-                            name="target"
-                            type="url"
-                            placeholder="https://example.com"
-                            required
-                        >
-
-                    </div>
-
-                    <div class="field full">
-
-                        <label>
-                            Authorized Scope
-                        </label>
-
-                        <textarea
-                            name="scope"
-                            placeholder="Example: public website only. No destructive testing or third-party systems."
-                            required
-                        ></textarea>
-
-                    </div>
-
-                    <div class="field full">
-
-                        <label class="check">
-
-                            <input
-                                type="checkbox"
-                                name="authorization"
-                                required
-                            >
-
-                            <span>
-
-                                I confirm that I own
-                                this website or have
-                                explicit authorization
-                                to request this
-                                security assessment.
-
-                            </span>
-
-                        </label>
-
-                    </div>
-
-                    <div class="field full">
-
-                        <button
-                            class="btn primary"
-                            type="submit"
-                        >
-                            SEND SECURITY REQUEST →
-
-                        </button>
-
-                    </div>
-
-                </div>
-
-            </form>
-
-        </div>
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        error=error
-    )
-
-    return render_page(
+    return page(
         "New Request",
-        body
+        REQUEST_FORM
     )
 
 
 # ============================================================
-# CLIENT PORTAL
+# CLIENT STATUS
 # ============================================================
 
-@app.route(
-    "/status/<int:request_id>"
-)
-def client_status(
-    request_id
-):
+@app.route("/status/<int:rid>")
+def client_status(rid):
 
     token = request.args.get(
         "token",
         ""
     )
 
-    if not client_authorized(
-        request_id,
+    r = valid_client(
+        rid,
         token
-    ):
-        abort(403)
-
-    item = get_request(
-        request_id
     )
 
-    connection = db()
+    con = db()
 
-    messages = connection.execute(
+    messages = con.execute(
         """
         SELECT *
         FROM messages
         WHERE request_id=?
-        ORDER BY id ASC
+        ORDER BY id
         """,
-        (
-            request_id,
-        )
+        (rid,)
     ).fetchall()
 
-    findings = connection.execute(
+    findings = con.execute(
         """
         SELECT *
         FROM findings
         WHERE request_id=?
         ORDER BY id DESC
         """,
-        (
-            request_id,
-        )
+        (rid,)
     ).fetchall()
 
-    connection.close()
+    con.close()
 
-    chat_open = item["status"] in (
-        "ACCEPTED",
-        "IN PROGRESS",
-        "COMPLETED"
+    report = url_for(
+        "client_report",
+        rid=rid,
+        token=token
     )
 
-    body = r'''
-<section class="section">
-
-    <div class="wrap">
-
-        <div class="head">
-
-            <div>
-
-                <div class="status">
-
-                    <span class="dot"></span>
-
-                    CLIENT SECURITY PORTAL
-
-                </div>
-
-                <h1 class="title">
-                    {{ item.web_name|e }}
-                </h1>
-
-                <p class="muted">
-
-                    Request #{{ item.id }}
-                    ·
-                    {{ item.target|e }}
-
-                </p>
-
-            </div>
-
-            <span
-                class="badge
-                {{ item.status|lower|replace(' ','-') }}"
-            >
-                {{ item.status|e }}
-            </span>
-
-        </div>
-
-        <div
-            class="kpis"
-            style="margin-bottom:18px"
-        >
-
-            <div class="kpi panel">
-
-                <strong>
-                    #{{ item.id }}
-                </strong>
-
-                <span>
-                    Request ID
-                </span>
-
-            </div>
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ findings|length }}
-                </strong>
-
-                <span>
-                    Findings
-                </span>
-
-            </div>
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ "OPEN" if chat_open else "LOCKED" }}
-                </strong>
-
-                <span>
-                    Client Chat
-                </span>
-
-            </div>
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ item.status }}
-                </strong>
-
-                <span>
-                    Current Status
-                </span>
-
-            </div>
-
-        </div>
-
-        <div class="two">
-
-            <div>
-
-                <div
-                    class="panel card"
-                    style="margin-bottom:18px"
-                >
-
-                    <h3>
-                        Assessment Details
-                    </h3>
-
-                    <p class="muted">
-
-                        <b>
-                            Name:
-                        </b>
-
-                        {{ item.name|e }}
-
-                    </p>
-
-                    <p class="muted">
-
-                        <b>
-                            Email:
-                        </b>
-
-                        {{ item.email|e }}
-
-                    </p>
-
-                    <p class="muted">
-
-                        <b>
-                            Web Name:
-                        </b>
-
-                        {{ item.web_name|e }}
-
-                    </p>
-
-                    <p class="muted">
-
-                        <b>
-                            Target:
-                        </b>
-
-                        {{ item.target|e }}
-
-                    </p>
-
-                    <p class="muted">
-
-                        <b>
-                            Scope:
-                        </b>
-
-                        <br>
-
-                        {{ item.scope|e }}
-
-                    </p>
-
-                    <a
-                        class="btn dark"
-                        href="{{ url_for(
-                            'client_report',
-                            request_id=item.id,
-                            token=token
-                        ) }}"
-                    >
-                        View Full Report →
-                    </a>
-
-                </div>
-
-                <h2 class="title">
-                    Security Findings
-                </h2>
-
-                {{ findings_html|safe }}
-
-            </div>
-
-            <div class="panel chat">
-
-                <div class="card">
-
-                    <h3 style="margin:0">
-                        Admin Chat
-                    </h3>
-
-                    <p class="muted">
-
-                        {% if chat_open %}
-
-                        Your request has been accepted.
-                        Chat is now open.
-
-                        {% else %}
-
-                        🔒 Chat opens after admin approval.
-
-                        {% endif %}
-
-                    </p>
-
-                </div>
-
-                <div class="chatbox">
-
-                    {{ messages_html|safe }}
-
-                </div>
-
-                {% if chat_open %}
-
-                <form
-                    class="chatform"
-                    method="POST"
-                    action="{{ url_for(
-                        'client_message',
-                        request_id=item.id
-                    ) }}?token={{ token|e }}"
-                >
-
-                    <input
-                        name="message"
-                        placeholder="Message admin..."
-                        autocomplete="off"
-                        required
-                    >
-
-                    <button
-                        class="btn primary"
-                        type="submit"
-                    >
-                        Send
-                    </button>
-
-                </form>
-
-                {% else %}
-
-                <div class="empty">
-                    🔒 Waiting for admin approval.
-                </div>
-
-                {% endif %}
-
-            </div>
-
-        </div>
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        item=item,
-        token=token,
+    return page(
+        "Client Portal",
+        CLIENT_STATUS,
+        r=r,
+        messages=messages,
         findings=findings,
-        chat_open=chat_open,
-        findings_html=render_findings(
-            findings
-        ),
-        messages_html=render_messages(
-            messages
-        )
+        token=token,
+        report_link=report
     )
 
-    import json
 
-    script = r'''
-async function refreshClient(){
-
-    try{
-
-        const response =
-            await fetch(
-                "__URL__",
-                {
-                    cache:"no-store"
-                }
-            );
-
-        if(!response.ok){
-            return;
-        }
-
-        const data =
-            await response.json();
-
-        if(
-            data.updated_at !==
-            window.currentUpdated
-        ){
-            location.reload();
-        }
-
-    }catch(error){
-        console.log(error);
-    }
-}
-
-window.currentUpdated =
-    __UPDATED__;
-
-setInterval(
-    refreshClient,
-    2500
-);
-'''
-
-    script = (
-        script
-        .replace(
-            "__URL__",
-            json.dumps(
-                url_for(
-                    "api_client",
-                    request_id=request_id,
-                    token=token
-                )
-            )
-        )
-        .replace(
-            "__UPDATED__",
-            json.dumps(
-                item["updated_at"]
-            )
-        )
-    )
-
-    return render_page(
-        "Client Portal #" + str(request_id),
-        body,
-        script
-    )
-
+# ============================================================
+# CLIENT CHAT
+# ============================================================
 
 @app.route(
-    "/api/client/<int:request_id>"
-)
-def api_client(
-    request_id
-):
-
-    token = request.args.get(
-        "token",
-        ""
-    )
-
-    if not client_authorized(
-        request_id,
-        token
-    ):
-        return jsonify(
-            {
-                "error":
-                    "forbidden"
-            }
-        ), 403
-
-    item = get_request(
-        request_id
-    )
-
-    return jsonify(
-        {
-            "updated_at":
-                item["updated_at"],
-
-            "status":
-                item["status"]
-        }
-    )
-
-
-@app.route(
-    "/status/<int:request_id>/message",
+    "/status/<int:rid>/message",
     methods=["POST"]
 )
-def client_message(
-    request_id
-):
+def client_message(rid):
 
-    token = request.args.get(
+    token = request.form.get(
         "token",
         ""
     )
 
-    if not client_authorized(
-        request_id,
+    r = valid_client(
+        rid,
         token
-    ):
-        abort(403)
-
-    item = get_request(
-        request_id
     )
 
-    if item["status"] not in (
-        "ACCEPTED",
-        "IN PROGRESS",
-        "COMPLETED"
-    ):
-        abort(403)
-
-    message = request.form.get(
+    msg = request.form.get(
         "message",
         ""
     ).strip()
 
-    if message:
+    if r["status"] not in (
+        "ACCEPTED",
+        "IN PROGRESS",
+        "COMPLETED"
+    ):
 
-        timestamp = now()
+        abort(403)
 
-        connection = db()
+    if not msg or len(msg) > 4000:
 
-        connection.execute(
-            """
-            INSERT INTO messages(
-                request_id,
-                sender,
-                message,
-                created_at
-            )
-            VALUES(
-                ?,
-                ?,
-                ?,
-                ?
-            )
-            """,
-            (
-                request_id,
-                "client",
-                message,
-                timestamp
+        abort(400)
+
+    con = db()
+
+    con.execute(
+        """
+        INSERT INTO messages(
+            request_id,
+            sender,
+            message,
+            created_at
+        )
+        VALUES(?,?,?,?)
+        """,
+        (
+            rid,
+            "CLIENT",
+            msg,
+            now()
+        )
+    )
+
+    con.execute(
+        """
+        UPDATE requests
+        SET updated_at=?
+        WHERE id=?
+        """,
+        (
+            now(),
+            rid
+        )
+    )
+
+    notify(
+        con,
+        rid,
+        "admin",
+        "CLIENT_MESSAGE",
+        "New client message",
+        f"{r['name']} sent a new message on request #{rid}."
+    )
+
+    con.commit()
+    con.close()
+
+    return ("", 204)
+
+
+# ============================================================
+# CLIENT API
+# ============================================================
+
+@app.route("/api/client/<int:rid>")
+def api_client(rid):
+
+    token = request.args.get(
+        "token",
+        ""
+    )
+
+    r = valid_client(
+        rid,
+        token
+    )
+
+    con = db()
+
+    last = con.execute(
+        """
+        SELECT id
+        FROM messages
+        WHERE request_id=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (rid,)
+    ).fetchone()
+
+    con.close()
+
+    return jsonify(
+        status=r["status"],
+        updated_at=r["updated_at"],
+        latest_message_id=(
+            last[0]
+            if last
+            else 0
+        )
+    )
+
+
+# ============================================================
+# CLIENT NOTIFICATIONS API
+# ============================================================
+
+@app.route(
+    "/api/client/<int:rid>/notifications"
+)
+def api_client_notifications(rid):
+
+    token = request.args.get(
+        "token",
+        ""
+    )
+
+    valid_client(
+        rid,
+        token
+    )
+
+    try:
+        since = int(
+            request.args.get(
+                "since",
+                0
             )
         )
+    except ValueError:
+        since = 0
 
-        connection.execute(
-            """
-            UPDATE requests
-            SET updated_at=?
-            WHERE id=?
-            """,
-            (
-                timestamp,
-                request_id
-            )
+    con = db()
+
+    rows = con.execute(
+        """
+        SELECT *
+        FROM notifications
+        WHERE request_id=?
+        AND audience='client'
+        AND id>?
+        ORDER BY id
+        LIMIT 50
+        """,
+        (
+            rid,
+            since
         )
+    ).fetchall()
 
-        connection.commit()
-        connection.close()
+    latest = con.execute(
+        """
+        SELECT COALESCE(
+            MAX(id),
+            0
+        )
+        FROM notifications
+        WHERE request_id=?
+        AND audience='client'
+        """,
+        (rid,)
+    ).fetchone()[0]
 
-    return redirect(
-        url_for(
+    con.close()
+
+    return jsonify(
+        latest_id=latest,
+        notifications=[
+            dict(x)
+            for x in rows
+        ]
+    )
+
+
+# ============================================================
+# CLIENT REPORT
+# ============================================================
+
+@app.route("/report/<int:rid>")
+def client_report(rid):
+
+    token = request.args.get(
+        "token",
+        ""
+    )
+
+    r = valid_client(
+        rid,
+        token
+    )
+
+    con = db()
+
+    findings = con.execute(
+        """
+        SELECT *
+        FROM findings
+        WHERE request_id=?
+        ORDER BY id DESC
+        """,
+        (rid,)
+    ).fetchall()
+
+    con.close()
+
+    return page(
+        "Security Report",
+        REPORT,
+        r=r,
+        findings=findings,
+        back_url=url_for(
             "client_status",
-            request_id=request_id,
+            rid=rid,
             token=token
         )
     )
@@ -2234,7 +3490,11 @@ def client_message(
 )
 def admin_login():
 
-    error = ""
+    if session.get("admin"):
+
+        return redirect(
+            url_for("admin_dashboard")
+        )
 
     if request.method == "POST":
 
@@ -2249,12 +3509,12 @@ def admin_login():
         )
 
         if (
-            secrets.compare_digest(
+            hmac.compare_digest(
                 email,
                 ADMIN_EMAIL
             )
-            and
-            secrets.compare_digest(
+            and ADMIN_PASSWORD
+            and hmac.compare_digest(
                 password,
                 ADMIN_PASSWORD
             )
@@ -2262,128 +3522,43 @@ def admin_login():
 
             session.clear()
 
-            session[
-                "admin_logged_in"
-            ] = True
+            session["admin"] = True
 
-            session[
-                "admin_email"
-            ] = ADMIN_EMAIL
+            session["csrf"] = (
+                secrets.token_urlsafe(24)
+            )
 
             return redirect(
-                url_for(
+                request.args.get(
+                    "next"
+                )
+                or url_for(
                     "admin_dashboard"
                 )
             )
 
-        error = (
-            "Invalid admin credentials."
+        flash(
+            "Invalid administrator credentials."
         )
 
-    body = r'''
-<section class="login">
-
-    <div class="status">
-
-        <span class="dot"></span>
-
-        PRIVATE ADMIN ACCESS
-
-    </div>
-
-    <div class="panel">
-
-        <h1 style="margin-top:0">
-            Admin Console
-        </h1>
-
-        <p class="muted">
-
-            Your admin email is already
-            filled in.
-
-            Save the password in your
-            browser once.
-
-        </p>
-
-        {% if error %}
-
-        <div class="notice error">
-            {{ error|e }}
-        </div>
-
-        {% endif %}
-
-        <form
-            method="POST"
-            autocomplete="on"
-        >
-
-            <div
-                class="field"
-                style="margin-bottom:15px"
-            >
-
-                <label>
-                    Admin Email
-                </label>
-
-                <input
-                    type="email"
-                    name="email"
-                    value="{{ email|e }}"
-                    autocomplete="username"
-                    readonly
-                    required
-                >
-
-            </div>
-
-            <div
-                class="field"
-                style="margin-bottom:20px"
-            >
-
-                <label>
-                    Password
-                </label>
-
-                <input
-                    type="password"
-                    name="password"
-                    autocomplete="current-password"
-                    placeholder="Your saved admin password"
-                    autofocus
-                    required
-                >
-
-            </div>
-
-            <button
-                class="btn primary"
-                type="submit"
-                style="width:100%"
-            >
-                ENTER ADMIN CONSOLE →
-            </button>
-
-        </form>
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        email=ADMIN_EMAIL,
-        error=error
+    return page(
+        "Admin Login",
+        LOGIN,
+        admin_email=ADMIN_EMAIL
     )
 
-    return render_page(
-        "Admin Login",
-        body
+
+# ============================================================
+# ADMIN LOGOUT
+# ============================================================
+
+@app.route("/admin/logout")
+def admin_logout():
+
+    session.clear()
+
+    return redirect(
+        url_for("admin_login")
     )
 
 
@@ -2395,1292 +3570,360 @@ def admin_login():
 @admin_required
 def admin_dashboard():
 
-    connection = db()
+    con = db()
 
-    rows = connection.execute(
+    rows = con.execute(
         """
         SELECT *
         FROM requests
-        ORDER BY
-            CASE status
-                WHEN 'PENDING' THEN 0
-                WHEN 'IN PROGRESS' THEN 1
-                WHEN 'ACCEPTED' THEN 2
-                WHEN 'COMPLETED' THEN 3
-                ELSE 4
-            END,
-            id DESC
+        ORDER BY id DESC
         """
     ).fetchall()
 
-    pending = sum(
-        row["status"] == "PENDING"
-        for row in rows
-    )
+    st = stats(con)
 
-    active = sum(
-        row["status"]
-        in (
-            "ACCEPTED",
-            "IN PROGRESS"
-        )
-        for row in rows
-    )
+    con.close()
 
-    completed = sum(
-        row["status"] == "COMPLETED"
-        for row in rows
-    )
-
-    findings_count = connection.execute(
-        """
-        SELECT COUNT(*) AS value
-        FROM findings
-        """
-    ).fetchone()["value"]
-
-    connection.close()
-
-    body = r'''
-<section class="section">
-
-    <div class="wrap">
-
-        <div class="head">
-
-            <div>
-
-                <div class="status">
-
-                    <span class="dot"></span>
-
-                    ADMIN CONSOLE ONLINE
-
-                </div>
-
-                <h1 class="title">
-                    Security Operations
-                </h1>
-
-                <p class="sub">
-
-                    Open one client at a time.
-                    Accept or decline the request;
-                    accepted clients unlock chat.
-
-                </p>
-
-            </div>
-
-            <a
-                class="btn red"
-                href="{{ url_for('admin_logout') }}"
-            >
-                Logout
-            </a>
-
-        </div>
-
-
-        <div
-            class="kpis"
-            style="margin-bottom:18px"
-        >
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ rows|length }}
-                </strong>
-
-                <span>
-                    Total Clients
-                </span>
-
-            </div>
-
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ pending }}
-                </strong>
-
-                <span>
-                    Waiting Review
-                </span>
-
-            </div>
-
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ active }}
-                </strong>
-
-                <span>
-                    Active
-                </span>
-
-            </div>
-
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ findings_count }}
-                </strong>
-
-                <span>
-                    Findings
-                </span>
-
-            </div>
-
-        </div>
-
-
-        <div class="panel">
-
-            <div class="card">
-
-                <h2 style="margin:0">
-                    Client Queue
-                </h2>
-
-                <p class="muted">
-
-                    {{ rows|length }}
-                    request(s) in the system.
-
-                </p>
-
-            </div>
-
-
-            {% if rows %}
-
-                {% for row in rows %}
-
-                <div class="client-item">
-
-                    <div class="client-main">
-
-                        <div class="client-name">
-                            {{ row.web_name|e }}
-                        </div>
-
-                        <div class="client-target">
-                            {{ row.target|e }}
-                        </div>
-
-                        <div class="client-meta">
-
-                            <span
-                                class="badge
-                                {{ row.status|lower|replace(' ','-') }}"
-                            >
-                                {{ row.status|e }}
-                            </span>
-
-                            <span class="muted">
-                                {{ row.name|e }}
-                            </span>
-
-                            <span class="muted">
-                                #{{ row.id }}
-                            </span>
-
-                        </div>
-
-                    </div>
-
-
-                    <a
-                        class="btn dark"
-                        href="{{ url_for(
-                            'admin_request',
-                            request_id=row.id
-                        ) }}"
-                    >
-                        Open Client →
-                    </a>
-
-                </div>
-
-                {% endfor %}
-
-            {% else %}
-
-                <div class="empty">
-
-                    No clients yet.
-
-                </div>
-
-            {% endif %}
-
-        </div>
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        rows=rows,
-        pending=pending,
-        active=active,
-        completed=completed,
-        findings_count=findings_count
-    )
-
-    import json
-
-    latest_update = max(
-        (
-            row["updated_at"]
-            for row in rows
-        ),
-        default=""
-    )
-
-    script = r'''
-async function refreshDashboard(){
-
-    try{
-
-        const response =
-            await fetch(
-                "__URL__",
-                {
-                    cache:"no-store"
-                }
-            );
-
-        if(!response.ok){
-            return;
-        }
-
-        const data =
-            await response.json();
-
-        if(
-            data.updated_at !==
-            window.currentUpdated
-        ){
-            location.reload();
-        }
-
-    }catch(error){
-        console.log(error);
-    }
-}
-
-window.currentUpdated =
-    __UPDATED__;
-
-setInterval(
-    refreshDashboard,
-    3000
-);
-'''
-
-    script = (
-        script
-        .replace(
-            "__URL__",
-            json.dumps(
-                url_for(
-                    "api_admin_dashboard"
-                )
-            )
-        )
-        .replace(
-            "__UPDATED__",
-            json.dumps(
-                latest_update
-            )
-        )
-    )
-
-    return render_page(
+    return page(
         "Admin Console",
-        body,
-        script
+        ADMIN_DASH,
+        rows=rows,
+        stats=st
     )
 
 
-@app.route(
-    "/api/admin/dashboard"
-)
+# ============================================================
+# ADMIN DASHBOARD API
+# ============================================================
+
+@app.route("/api/admin/dashboard")
 @admin_required
 def api_admin_dashboard():
 
-    connection = db()
+    con = db()
 
-    row = connection.execute(
+    st = stats(con)
+
+    latest = con.execute(
         """
-        SELECT updated_at
+        SELECT COALESCE(
+            MAX(id),
+            0
+        )
+        FROM notifications
+        WHERE audience='admin'
+        """
+    ).fetchone()[0]
+
+    latest_update = con.execute(
+        """
+        SELECT COALESCE(
+            MAX(updated_at),
+            ''
+        )
         FROM requests
-        ORDER BY updated_at DESC
-        LIMIT 1
         """
-    ).fetchone()
+    ).fetchone()[0]
 
-    connection.close()
+    con.close()
 
     return jsonify(
-        {
-            "updated_at":
-                row["updated_at"]
-                if row
-                else ""
-        }
+        stats=st,
+        latest_notification_id=latest,
+        latest_updated_at=latest_update
     )
 
 
 # ============================================================
-# SINGLE CLIENT CONTROL CENTER
+# ADMIN NOTIFICATIONS
+# ============================================================
+
+@app.route("/api/admin/notifications")
+@admin_required
+def api_admin_notifications():
+
+    try:
+        since = int(
+            request.args.get(
+                "since",
+                0
+            )
+        )
+    except ValueError:
+        since = 0
+
+    con = db()
+
+    rows = con.execute(
+        """
+        SELECT *
+        FROM notifications
+        WHERE audience='admin'
+        AND id>?
+        ORDER BY id
+        LIMIT 50
+        """,
+        (since,)
+    ).fetchall()
+
+    con.close()
+
+    return jsonify(
+        notifications=[
+            dict(x)
+            for x in rows
+        ]
+    )
+
+
+# ============================================================
+# ADMIN CLIENT DETAIL
 # ============================================================
 
 @app.route(
-    "/admin/request/<int:request_id>",
-    methods=["GET", "POST"]
+    "/admin/request/<int:rid>"
 )
 @admin_required
-def admin_request(
-    request_id
-):
+def admin_request(rid):
 
-    item = get_request(
-        request_id
-    )
+    r = get_request(rid)
 
-    if not item:
+    if not r:
         abort(404)
 
-    action_message = ""
+    con = db()
 
-    if request.method == "POST":
-
-        action = request.form.get(
-            "decision",
-            ""
-        )
-
-        if (
-            action in (
-                "ACCEPT",
-                "DECLINE"
-            )
-            and
-            item["status"] == "PENDING"
-        ):
-
-            new_status = (
-                "ACCEPTED"
-                if action == "ACCEPT"
-                else "DECLINED"
-            )
-
-            if action == "ACCEPT":
-
-                system_message = (
-                    "Your security request has "
-                    "been ACCEPTED. The secure "
-                    "chat with the administrator "
-                    "is now open."
-                )
-
-            else:
-
-                system_message = (
-                    "Your security request has "
-                    "been DECLINED. The "
-                    "administrator has closed "
-                    "this request."
-                )
-
-            timestamp = now()
-
-            connection = db()
-
-            connection.execute(
-                """
-                UPDATE requests
-                SET
-                    status=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    new_status,
-                    timestamp,
-                    request_id
-                )
-            )
-
-            connection.execute(
-                """
-                INSERT INTO messages(
-                    request_id,
-                    sender,
-                    message,
-                    created_at
-                )
-                VALUES(
-                    ?,
-                    ?,
-                    ?,
-                    ?
-                )
-                """,
-                (
-                    request_id,
-                    "system",
-                    system_message,
-                    timestamp
-                )
-            )
-
-            connection.commit()
-            connection.close()
-
-            item = get_request(
-                request_id
-            )
-
-            action_message = (
-                "Request updated successfully."
-            )
-
-        elif (
-            action == "START"
-            and
-            item["status"] == "ACCEPTED"
-        ):
-
-            timestamp = now()
-
-            connection = db()
-
-            connection.execute(
-                """
-                UPDATE requests
-                SET
-                    status=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    "IN PROGRESS",
-                    timestamp,
-                    request_id
-                )
-            )
-
-            connection.commit()
-            connection.close()
-
-            item = get_request(
-                request_id
-            )
-
-            action_message = (
-                "Assessment moved to IN PROGRESS."
-            )
-
-        elif (
-            action == "COMPLETE"
-            and
-            item["status"]
-            in (
-                "ACCEPTED",
-                "IN PROGRESS"
-            )
-        ):
-
-            timestamp = now()
-
-            connection = db()
-
-            connection.execute(
-                """
-                UPDATE requests
-                SET
-                    status=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    "COMPLETED",
-                    timestamp,
-                    request_id
-                )
-            )
-
-            connection.commit()
-            connection.close()
-
-            item = get_request(
-                request_id
-            )
-
-            action_message = (
-                "Assessment marked COMPLETED."
-            )
-
-        elif (
-            action == "REOPEN"
-            and
-            item["status"] == "DECLINED"
-        ):
-
-            timestamp = now()
-
-            connection = db()
-
-            connection.execute(
-                """
-                UPDATE requests
-                SET
-                    status=?,
-                    updated_at=?
-                WHERE id=?
-                """,
-                (
-                    "PENDING",
-                    timestamp,
-                    request_id
-                )
-            )
-
-            connection.commit()
-            connection.close()
-
-            item = get_request(
-                request_id
-            )
-
-            action_message = (
-                "Request reopened."
-            )
-
-    connection = db()
-
-    messages = connection.execute(
+    messages = con.execute(
         """
         SELECT *
         FROM messages
         WHERE request_id=?
-        ORDER BY id ASC
+        ORDER BY id
         """,
-        (
-            request_id,
-        )
+        (rid,)
     ).fetchall()
 
-    findings = connection.execute(
+    findings = con.execute(
         """
         SELECT *
         FROM findings
         WHERE request_id=?
         ORDER BY id DESC
         """,
-        (
-            request_id,
-        )
+        (rid,)
     ).fetchall()
 
-    connection.close()
+    con.close()
 
-    chat_open = item["status"] in (
-        "ACCEPTED",
-        "IN PROGRESS",
-        "COMPLETED"
+    client_link = url_for(
+        "client_status",
+        rid=rid,
+        token=r["client_token"],
+        _external=True
     )
 
-    body = r'''
-<section class="section">
-
-    <div class="wrap">
-
-        <div class="head">
-
-            <div>
-
-                <div class="status">
-
-                    <span class="dot"></span>
-
-                    CLIENT CONTROL CENTER
-
-                </div>
-
-                <h1 class="title">
-                    {{ item.web_name|e }}
-                </h1>
-
-                <p class="muted">
-
-                    Request #{{ item.id }}
-                    ·
-                    {{ item.target|e }}
-
-                </p>
-
-            </div>
-
-            <a
-                class="btn dark"
-                href="{{ url_for(
-                    'admin_dashboard'
-                ) }}"
-            >
-                ← Dashboard
-            </a>
-
-        </div>
-
-
-        {% if action_message %}
-
-        <div class="notice success">
-
-            {{ action_message|e }}
-
-        </div>
-
-        {% endif %}
-
-
-        <div
-            class="kpis"
-            style="margin-bottom:18px"
-        >
-
-            <div class="kpi panel">
-
-                <strong>
-                    #{{ item.id }}
-                </strong>
-
-                <span>
-                    Request ID
-                </span>
-
-            </div>
-
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ item.status }}
-                </strong>
-
-                <span>
-                    Status
-                </span>
-
-            </div>
-
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ "OPEN" if chat_open else "LOCKED" }}
-                </strong>
-
-                <span>
-                    Chat
-                </span>
-
-            </div>
-
-
-            <div class="kpi panel">
-
-                <strong>
-                    {{ findings|length }}
-                </strong>
-
-                <span>
-                    Findings
-                </span>
-
-            </div>
-
-        </div>
-
-
-        <div class="two">
-
-            <div>
-
-                <div
-                    class="panel card"
-                    style="margin-bottom:18px"
-                >
-
-                    <h3>
-                        Client Information
-                    </h3>
-
-
-                    <p class="muted">
-
-                        <b>
-                            Name:
-                        </b>
-
-                        {{ item.name|e }}
-
-                    </p>
-
-
-                    <p class="muted">
-
-                        <b>
-                            Email:
-                        </b>
-
-                        {{ item.email|e }}
-
-                    </p>
-
-
-                    <p class="muted">
-
-                        <b>
-                            Web Name:
-                        </b>
-
-                        {{ item.web_name|e }}
-
-                    </p>
-
-
-                    <p class="muted">
-
-                        <b>
-                            Target:
-                        </b>
-
-                        {{ item.target|e }}
-
-                    </p>
-
-
-                    <p class="muted">
-
-                        <b>
-                            Scope:
-                        </b>
-
-                        <br>
-
-                        {{ item.scope|e }}
-
-                    </p>
-
-                </div>
-
-
-                <div
-                    class="panel card"
-                    style="margin-bottom:18px"
-                >
-
-                    <h3>
-                        Decision Center
-                    </h3>
-
-
-                    {% if item.status == "PENDING" %}
-
-                    <form
-                        method="POST"
-                        class="actions"
-                    >
-
-                        <button
-                            class="btn green"
-                            name="decision"
-                            value="ACCEPT"
-                            type="submit"
-                        >
-                            ✓ ACCEPT CLIENT
-                        </button>
-
-                        <button
-                            class="btn red"
-                            name="decision"
-                            value="DECLINE"
-                            type="submit"
-                        >
-                            ✕ DECLINE CLIENT
-                        </button>
-
-                    </form>
-
-
-                    <p
-                        class="muted"
-                        style="margin-bottom:0"
-                    >
-
-                        Accepting sends an automatic
-                        message to the client and
-                        unlocks the chat.
-
-                    </p>
-
-
-                    {% elif item.status == "ACCEPTED" %}
-
-                    <form method="POST">
-
-                        <button
-                            class="btn primary"
-                            name="decision"
-                            value="START"
-                            type="submit"
-                        >
-                            START ASSESSMENT →
-                        </button>
-
-                    </form>
-
-
-                    {% elif item.status == "IN PROGRESS" %}
-
-                    <form method="POST">
-
-                        <button
-                            class="btn green"
-                            name="decision"
-                            value="COMPLETE"
-                            type="submit"
-                        >
-                            MARK COMPLETED ✓
-                        </button>
-
-                    </form>
-
-
-                    {% elif item.status == "DECLINED" %}
-
-                    <form method="POST">
-
-                        <button
-                            class="btn yellow"
-                            name="decision"
-                            value="REOPEN"
-                            type="submit"
-                        >
-                            REOPEN REQUEST
-                        </button>
-
-                    </form>
-
-
-                    {% else %}
-
-                    <span class="badge completed">
-                        COMPLETED
-                    </span>
-
-                    {% endif %}
-
-                </div>
-
-
-                <h2 class="title">
-                    Findings
-                </h2>
-
-
-                {{ findings_html|safe }}
-
-            </div>
-
-
-            <div class="panel chat">
-
-                <div class="card">
-
-                    <h3
-                        style="margin:0"
-                    >
-                        Live Client Chat
-                    </h3>
-
-
-                    <p class="muted">
-
-                        {% if chat_open %}
-
-                        Chat is open.
-
-                        {% else %}
-
-                        🔒 Accept the client
-                        to unlock chat.
-
-                        {% endif %}
-
-                    </p>
-
-                </div>
-
-
-                <div class="chatbox">
-
-                    {{ messages_html|safe }}
-
-                </div>
-
-
-                {% if chat_open %}
-
-                <form
-                    class="chatform"
-                    method="POST"
-                    action="{{ url_for(
-                        'admin_message',
-                        request_id=item.id
-                    ) }}"
-                >
-
-                    <input
-                        name="message"
-                        placeholder="Message client..."
-                        required
-                    >
-
-                    <button
-                        class="btn primary"
-                        type="submit"
-                    >
-                        Send
-                    </button>
-
-                </form>
-
-                {% else %}
-
-                <div class="empty">
-
-                    🔒 Accept the client
-                    to unlock chat.
-
-                </div>
-
-                {% endif %}
-
-            </div>
-
-        </div>
-
-
-        <div
-            class="panel card"
-            style="margin-top:18px"
-        >
-
-            <h2 style="margin-top:0">
-                Publish Finding
-            </h2>
-
-
-            <form
-                method="POST"
-                action="{{ url_for(
-                    'add_finding',
-                    request_id=item.id
-                ) }}"
-            >
-
-                <div class="grid">
-
-                    <div class="field">
-
-                        <label>
-                            Finding Title
-                        </label>
-
-                        <input
-                            name="title"
-                            placeholder="Information Disclosure"
-                            required
-                        >
-
-                    </div>
-
-
-                    <div class="field">
-
-                        <label>
-                            Severity
-                        </label>
-
-                        <select
-                            name="severity"
-                        >
-
-                            <option>
-                                INFO
-                            </option>
-
-                            <option>
-                                LOW
-                            </option>
-
-                            <option>
-                                MEDIUM
-                            </option>
-
-                            <option>
-                                HIGH
-                            </option>
-
-                            <option>
-                                CRITICAL
-                            </option>
-
-                        </select>
-
-                    </div>
-
-
-                    <div
-                        class="field full"
-                    >
-
-                        <label>
-                            Description
-                        </label>
-
-                        <textarea
-                            name="description"
-                            required
-                        ></textarea>
-
-                    </div>
-
-
-                    <div
-                        class="field full"
-                    >
-
-                        <label>
-                            Evidence
-                        </label>
-
-                        <textarea
-                            name="evidence"
-                            required
-                        ></textarea>
-
-                    </div>
-
-
-                    <div
-                        class="field full"
-                    >
-
-                        <label>
-                            Recommendation
-                        </label>
-
-                        <textarea
-                            name="recommendation"
-                            required
-                        ></textarea>
-
-                    </div>
-
-
-                    <div
-                        class="field full"
-                    >
-
-                        <button
-                            class="btn green"
-                            type="submit"
-                        >
-                            PUBLISH FINDING
-                        </button>
-
-                    </div>
-
-                </div>
-
-            </form>
-
-        </div>
-
-
-        <div
-            class="actions"
-            style="margin-top:18px"
-        >
-
-            <a
-                class="btn dark"
-                href="{{ url_for(
-                    'admin_report',
-                    request_id=item.id
-                ) }}"
-            >
-                View Full Report →
-            </a>
-
-        </div>
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        item=item,
-        action_message=action_message,
-        chat_open=chat_open,
+    return page(
+        "Client #" + str(rid),
+        ADMIN_DETAIL,
+        r=r,
+        messages=messages,
         findings=findings,
-        findings_html=render_findings(
-            findings
-        ),
-        messages_html=render_messages(
-            messages
-        )
+        csrf=csrf(),
+        client_link=client_link
     )
 
-    import json
 
-    script = r'''
-async function refreshClientControl(){
-
-    try{
-
-        const response =
-            await fetch(
-                "__URL__",
-                {
-                    cache:"no-store"
-                }
-            );
-
-        if(!response.ok){
-            return;
-        }
-
-        const data =
-            await response.json();
-
-        if(
-            data.updated_at !==
-            window.currentUpdated
-        ){
-            location.reload();
-        }
-
-    }catch(error){
-
-        console.log(error);
-
-    }
-}
-
-window.currentUpdated =
-    __UPDATED__;
-
-setInterval(
-    refreshClientControl,
-    2500
-);
-'''
-
-    script = (
-        script
-        .replace(
-            "__URL__",
-            json.dumps(
-                url_for(
-                    "api_admin_request",
-                    request_id=request_id
-                )
-            )
-        )
-        .replace(
-            "__UPDATED__",
-            json.dumps(
-                item["updated_at"]
-            )
-        )
-    )
-
-    return render_page(
-        "Client Control #" + str(request_id),
-        body,
-        script
-    )
-
+# ============================================================
+# ADMIN CLIENT API
+# ============================================================
 
 @app.route(
-    "/api/admin/request/<int:request_id>"
+    "/api/admin/request/<int:rid>"
 )
 @admin_required
-def api_admin_request(
-    request_id
-):
+def api_admin_request(rid):
 
-    item = get_request(
-        request_id
-    )
+    r = get_request(rid)
 
-    if not item:
+    if not r:
+        abort(404)
 
-        return jsonify(
-            {
-                "error":
-                    "not found"
-            }
-        ), 404
+    con = db()
+
+    last = con.execute(
+        """
+        SELECT id
+        FROM messages
+        WHERE request_id=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (rid,)
+    ).fetchone()
+
+    con.close()
 
     return jsonify(
-        {
-            "updated_at":
-                item["updated_at"],
-
-            "status":
-                item["status"]
-        }
+        status=r["status"],
+        updated_at=r["updated_at"],
+        latest_message_id=(
+            last[0]
+            if last
+            else 0
+        )
     )
 
 
+# ============================================================
+# ADMIN STATUS ACTIONS
+# ============================================================
+
 @app.route(
-    "/admin/request/<int:request_id>/message",
+    "/admin/request/<int:rid>/decision",
     methods=["POST"]
 )
 @admin_required
-def admin_message(
-    request_id
-):
+def admin_decision(rid):
 
-    item = get_request(
-        request_id
+    check_csrf()
+
+    action = request.form.get(
+        "action",
+        ""
     )
 
-    if not item:
+    r = get_request(rid)
 
+    if not r:
         abort(404)
 
-    if item["status"] not in (
+    transitions = {
+
+        "ACCEPT": (
+            "PENDING",
+            "ACCEPTED",
+            "Your security request has been ACCEPTED. Secure chat is now open."
+        ),
+
+        "DECLINE": (
+            "PENDING",
+            "DECLINED",
+            "Your security request has been DECLINED. The administrator has closed this request."
+        ),
+
+        "START": (
+            "ACCEPTED",
+            "IN PROGRESS",
+            "Your security assessment has STARTED. The request is now in progress."
+        ),
+
+        "COMPLETE": (
+            "IN PROGRESS",
+            "COMPLETED",
+            "Your security assessment has been marked COMPLETED."
+        ),
+
+        "REOPEN": (
+            "DECLINED",
+            "PENDING",
+            "Your security request has been REOPENED and is waiting for administrator review."
+        )
+    }
+
+    if (
+        action not in transitions
+        or r["status"]
+        != transitions[action][0]
+    ):
+
+        flash(
+            "That action is not available for the current status."
+        )
+
+        return redirect(
+            url_for(
+                "admin_request",
+                rid=rid
+            )
+        )
+
+    _, new_status, body = (
+        transitions[action]
+    )
+
+    con = db()
+
+    timestamp = now()
+
+    con.execute(
+        """
+        UPDATE requests
+        SET status=?,
+            updated_at=?
+        WHERE id=?
+        """,
+        (
+            new_status,
+            timestamp,
+            rid
+        )
+    )
+
+    add_system(
+        con,
+        rid,
+        body
+    )
+
+    notify(
+        con,
+        rid,
+        "client",
+        "STATUS_CHANGE",
+        "Security request updated",
+        body
+    )
+
+    con.commit()
+    con.close()
+
+    return redirect(
+        url_for(
+            "admin_request",
+            rid=rid
+        )
+    )
+
+
+# ============================================================
+# ADMIN CHAT
+# ============================================================
+
+@app.route(
+    "/admin/request/<int:rid>/message",
+    methods=["POST"]
+)
+@admin_required
+def admin_message(rid):
+
+    check_csrf()
+
+    r = get_request(rid)
+
+    msg = request.form.get(
+        "message",
+        ""
+    ).strip()
+
+    if (
+        not r
+        or not msg
+        or len(msg) > 4000
+    ):
+
+        abort(400)
+
+    if r["status"] not in (
         "ACCEPTED",
         "IN PROGRESS",
         "COMPLETED"
@@ -3688,71 +3931,78 @@ def admin_message(
 
         abort(403)
 
-    message = request.form.get(
-        "message",
-        ""
-    ).strip()
+    con = db()
 
-    if message:
-
-        timestamp = now()
-
-        connection = db()
-
-        connection.execute(
-            """
-            INSERT INTO messages(
-                request_id,
-                sender,
-                message,
-                created_at
-            )
-            VALUES(
-                ?,
-                ?,
-                ?,
-                ?
-            )
-            """,
-            (
-                request_id,
-                "admin",
-                message,
-                timestamp
-            )
+    con.execute(
+        """
+        INSERT INTO messages(
+            request_id,
+            sender,
+            message,
+            created_at
         )
-
-        connection.execute(
-            """
-            UPDATE requests
-            SET updated_at=?
-            WHERE id=?
-            """,
-            (
-                timestamp,
-                request_id
-            )
-        )
-
-        connection.commit()
-        connection.close()
-
-    return redirect(
-        url_for(
-            "admin_request",
-            request_id=request_id
+        VALUES(?,?,?,?)
+        """,
+        (
+            rid,
+            "ADMIN",
+            msg,
+            now()
         )
     )
 
+    con.execute(
+        """
+        UPDATE requests
+        SET updated_at=?
+        WHERE id=?
+        """,
+        (
+            now(),
+            rid
+        )
+    )
+
+    notify(
+        con,
+        rid,
+        "client",
+        "ADMIN_MESSAGE",
+        "New administrator message",
+        "The administrator sent you a new message."
+    )
+
+    con.commit()
+    con.close()
+
+    return ("", 204)
+
+
+# ============================================================
+# ADMIN FINDINGS
+# ============================================================
 
 @app.route(
-    "/admin/request/<int:request_id>/finding",
+    "/admin/request/<int:rid>/finding",
     methods=["POST"]
 )
 @admin_required
-def add_finding(
-    request_id
-):
+def admin_finding(rid):
+
+    check_csrf()
+
+    r = get_request(rid)
+
+    if not r:
+        abort(404)
+
+    if r["status"] not in (
+        "ACCEPTED",
+        "IN PROGRESS",
+        "COMPLETED"
+    ):
+
+        abort(403)
 
     title = request.form.get(
         "title",
@@ -3779,34 +4029,23 @@ def add_finding(
         ""
     ).strip()
 
-    allowed = {
-        "INFO",
-        "LOW",
-        "MEDIUM",
-        "HIGH",
-        "CRITICAL"
-    }
-
     if (
-        severity not in allowed
-        or
-        not all(
-            [
-                title,
-                description,
-                evidence,
-                recommendation
-            ]
+        not title
+        or not description
+        or severity not in (
+            "INFO",
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL"
         )
     ):
 
         abort(400)
 
-    timestamp = now()
+    con = db()
 
-    connection = db()
-
-    connection.execute(
+    con.execute(
         """
         INSERT INTO findings(
             request_id,
@@ -3817,46 +4056,47 @@ def add_finding(
             recommendation,
             created_at
         )
-        VALUES(
-            ?,
-            ?,
-            ?,
-            ?,
-            ?,
-            ?,
-            ?
-        )
+        VALUES(?,?,?,?,?,?,?)
         """,
         (
-            request_id,
+            rid,
             title,
             severity,
             description,
             evidence,
             recommendation,
-            timestamp
+            now()
         )
     )
 
-    connection.execute(
+    con.execute(
         """
         UPDATE requests
         SET updated_at=?
         WHERE id=?
         """,
         (
-            timestamp,
-            request_id
+            now(),
+            rid
         )
     )
 
-    connection.commit()
-    connection.close()
+    notify(
+        con,
+        rid,
+        "client",
+        "NEW_FINDING",
+        "New security finding published",
+        f"A {severity} finding was published for {r['web_name']}."
+    )
+
+    con.commit()
+    con.close()
 
     return redirect(
         url_for(
             "admin_request",
-            request_id=request_id
+            rid=rid
         )
     )
 
@@ -3866,452 +4106,100 @@ def add_finding(
 # ============================================================
 
 @app.route(
-    "/admin/report/<int:request_id>"
+    "/admin/report/<int:rid>"
 )
 @admin_required
-def admin_report(
-    request_id
-):
+def admin_report(rid):
 
-    item = get_request(
-        request_id
-    )
+    r = get_request(rid)
 
-    if not item:
-
+    if not r:
         abort(404)
 
-    connection = db()
+    con = db()
 
-    findings = connection.execute(
+    findings = con.execute(
         """
         SELECT *
         FROM findings
         WHERE request_id=?
         ORDER BY id DESC
         """,
-        (
-            request_id,
-        )
+        (rid,)
     ).fetchall()
 
-    connection.close()
+    con.close()
 
-    body = r'''
-<section class="section">
-
-    <div class="wrap">
-
-        <div class="head">
-
-            <div>
-
-                <div class="status">
-
-                    <span class="dot"></span>
-
-                    SECURITY REPORT
-
-                </div>
-
-
-                <h1 class="title">
-                    {{ item.web_name|e }}
-                </h1>
-
-
-                <p class="muted">
-                    {{ item.target|e }}
-                </p>
-
-            </div>
-
-
-            <a
-                class="btn dark"
-                href="{{ url_for(
-                    'admin_request',
-                    request_id=item.id
-                ) }}"
-            >
-                ← Back
-            </a>
-
-        </div>
-
-
-        <div
-            class="panel card"
-            style="margin-bottom:18px"
-        >
-
-            <h3>
-                Assessment Overview
-            </h3>
-
-
-            <p class="muted">
-                <b>Client:</b>
-                {{ item.name|e }}
-            </p>
-
-
-            <p class="muted">
-                <b>Email:</b>
-                {{ item.email|e }}
-            </p>
-
-
-            <p class="muted">
-                <b>Website:</b>
-                {{ item.web_name|e }}
-            </p>
-
-
-            <p class="muted">
-                <b>Target:</b>
-                {{ item.target|e }}
-            </p>
-
-
-            <p class="muted">
-
-                <b>
-                    Authorized Scope:
-                </b>
-
-                <br>
-
-                {{ item.scope|e }}
-
-            </p>
-
-
-            <p class="muted">
-
-                <b>
-                    Status:
-                </b>
-
-                {{ item.status|e }}
-
-            </p>
-
-        </div>
-
-
-        <h2 class="title">
-            Findings
-        </h2>
-
-
-        {{ findings_html|safe }}
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        item=item,
-        findings_html=render_findings(
-            findings
+    return page(
+        "Security Report",
+        REPORT,
+        r=r,
+        findings=findings,
+        back_url=url_for(
+            "admin_request",
+            rid=rid
         )
-    )
-
-    return render_page(
-        "Report #" + str(request_id),
-        body
     )
 
 
 # ============================================================
-# CLIENT REPORT
+# ERROR PAGES
 # ============================================================
-
-@app.route(
-    "/report/<int:request_id>"
-)
-def client_report(
-    request_id
-):
-
-    token = request.args.get(
-        "token",
-        ""
-    )
-
-    if not client_authorized(
-        request_id,
-        token
-    ):
-
-        abort(403)
-
-    item = get_request(
-        request_id
-    )
-
-    connection = db()
-
-    findings = connection.execute(
-        """
-        SELECT *
-        FROM findings
-        WHERE request_id=?
-        ORDER BY id DESC
-        """,
-        (
-            request_id,
-        )
-    ).fetchall()
-
-    connection.close()
-
-    body = r'''
-<section class="section">
-
-    <div class="wrap">
-
-        <div class="head">
-
-            <div>
-
-                <div class="status">
-
-                    <span class="dot"></span>
-
-                    PRIVATE SECURITY REPORT
-
-                </div>
-
-
-                <h1 class="title">
-                    {{ item.web_name|e }}
-                </h1>
-
-
-                <p class="muted">
-                    {{ item.target|e }}
-                </p>
-
-            </div>
-
-
-            <span
-                class="badge
-                {{ item.status|lower|replace(' ','-') }}"
-            >
-                {{ item.status|e }}
-            </span>
-
-        </div>
-
-
-        <div
-            class="panel card"
-            style="margin-bottom:18px"
-        >
-
-            <h3>
-                Executive Summary
-            </h3>
-
-
-            <p class="muted">
-
-                This report contains findings
-                published by the assessment
-                administrator and is limited
-                to the authorized scope supplied
-                with the request.
-
-            </p>
-
-        </div>
-
-
-        <h2 class="title">
-            Security Findings
-        </h2>
-
-
-        {{ findings_html|safe }}
-
-
-        <div style="margin-top:18px">
-
-            <a
-                class="btn dark"
-                href="{{ url_for(
-                    'client_status',
-                    request_id=item.id,
-                    token=token
-                ) }}"
-            >
-                ← Back to Portal
-            </a>
-
-        </div>
-
-    </div>
-
-</section>
-'''
-
-    body = render_template_string(
-        body,
-        item=item,
-        token=token,
-        findings_html=render_findings(
-            findings
-        )
-    )
-
-    return render_page(
-        "Client Report #" + str(request_id),
-        body
-    )
-
-
-# ============================================================
-# LOGOUT + ERRORS
-# ============================================================
-
-@app.route(
-    "/admin/logout"
-)
-def admin_logout():
-
-    session.clear()
-
-    return redirect(
-        url_for(
-            "home"
-        )
-    )
-
 
 @app.errorhandler(403)
-def forbidden(_error):
+def forbidden(e):
 
-    return render_page(
-        "Access Denied",
-        """
-        <section class="section">
-            <div class="wrap">
-                <div
-                    class="panel card"
-                    style="text-align:center"
-                >
-                    <div style="font-size:55px">
-                        🔒
-                    </div>
-
-                    <h1>
-                        Access denied
-                    </h1>
-
-                    <p class="muted">
-                        This private portal link is invalid.
-                    </p>
-
-                    <a
-                        class="btn primary"
-                        href="/"
-                    >
-                        Return Home
-                    </a>
-                </div>
+    return (
+        page(
+            "403",
+            r'''
+            <div class="card">
+                <h1>403 · Forbidden</h1>
+                <p class="muted">
+                    You are not authorized to access
+                    this resource.
+                </p>
             </div>
-        </section>
-        """
-    ), 403
+            '''
+        ),
+        403
+    )
 
 
 @app.errorhandler(404)
-def not_found(_error):
+def not_found(e):
 
-    return render_page(
-        "Not Found",
-        """
-        <section class="section">
-            <div class="wrap">
-                <div
-                    class="panel card"
-                    style="text-align:center"
-                >
-                    <div style="font-size:55px">
-                        🛰️
-                    </div>
-
-                    <h1>
-                        Page not found
-                    </h1>
-
-                    <p class="muted">
-                        This page does not exist.
-                    </p>
-
-                    <a
-                        class="btn primary"
-                        href="/"
-                    >
-                        Return Home
-                    </a>
-                </div>
+    return (
+        page(
+            "404",
+            r'''
+            <div class="card">
+                <h1>404 · Not Found</h1>
+                <p class="muted">
+                    The requested resource does not exist.
+                </p>
             </div>
-        </section>
-        """
-    ), 404
+            '''
+        ),
+        404
+    )
 
 
 # ============================================================
-# STARTUP
+# LOCAL START
 # ============================================================
-
-init_db()
-
 
 if __name__ == "__main__":
 
-    print(
-        "=========================================="
-    )
-
-    print(
-        "      MATIA // SECURITY CHECK"
-    )
-
-    print(
-        "=========================================="
-    )
-
-    print(
-        "Admin email:",
-        ADMIN_EMAIL
-    )
-
-    print(
-        "Port:",
-        PORT
-    )
-
-    print(
-        "Automatic scanning: DISABLED"
-    )
-
-    print(
-        "Database: READY"
-    )
-
-    print(
-        "=========================================="
+    port = int(
+        os.getenv(
+            "PORT",
+            "10000"
+        )
     )
 
     app.run(
         host="0.0.0.0",
-        port=PORT,
+        port=port,
         debug=False
     )
