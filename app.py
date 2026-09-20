@@ -73,8 +73,10 @@ COOKIE_SECURE = (
 # ============================================================
 # FLASK
 # ============================================================
-
 app = Flask(__name__)
+@app.route("/googled6013c64975ddc7c.html")
+def google_search_console_verification():
+    return "google-site-verification: googled6013c64975ddc7c.html"
 
 app.config.update(
     SECRET_KEY=SECRET_KEY,
