@@ -1245,6 +1245,52 @@ button{
     border:1px solid #174a36;
     border-radius:7px;
 }
+.feedback-form input,
+.feedback-form textarea{
+    width:100%;
+    margin-top:10px;
+    padding:13px 14px;
+    background:#020504;
+    color:#ffffff;
+    border:1px solid #174a36;
+    border-radius:9px;
+    outline:none;
+    font:inherit;
+}
+.feedback-form textarea{
+    min-height:125px;
+    resize:vertical;
+}
+.feedback-form input:focus,
+.feedback-form textarea:focus{
+    border-color:#ffd84d;
+    box-shadow:0 0 0 2px rgba(255,216,77,.08),0 0 18px rgba(255,216,77,.08);
+}
+.feedback-stars{
+    display:flex;
+    gap:5px;
+    align-items:center;
+    margin:12px 0;
+}
+.feedback-stars button{
+    margin:0;
+    padding:2px 5px;
+    background:transparent;
+    border:0;
+    color:#4b635a;
+    font-size:34px;
+    line-height:1;
+    cursor:pointer;
+    transition:transform .12s ease,color .12s ease,text-shadow .12s ease;
+}
+.feedback-stars button:hover{
+    transform:scale(1.12);
+    color:#ffd84d;
+}
+.feedback-stars button.selected{
+    color:#ffd84d;
+    text-shadow:0 0 12px rgba(255,216,77,.35);
+}
 .hidden{
     display:none;
 }
@@ -1461,8 +1507,10 @@ function setRating(value){
     document
         .querySelectorAll("#stars button")
         .forEach((button,index)=>{
-            button.style.color =
-                index < value ? "#00ff9c" : "#4b635a";
+            button.classList.toggle(
+                "selected",
+                index < value
+            );
         });
 }
 
@@ -1620,39 +1668,48 @@ async function loadData(){
 
         }else if(data.request.status === "COMPLETED"){
 
-            feedbackArea.innerHTML = `
-                <div style="margin-bottom:10px;color:#91aaa0">
-                    Your assessment is complete. Leave a quick review:
-                </div>
+            // Do not rebuild the form every polling cycle.
+            // Rebuilding it once per second was clearing anything
+            // the client was typing into the textarea.
+            if(!document.getElementById("feedbackMessage")){
 
-                <div id="stars" style="font-size:30px;margin-bottom:10px">
-                    <button type="button" onclick="setRating(1)">★</button>
-                    <button type="button" onclick="setRating(2)">★</button>
-                    <button type="button" onclick="setRating(3)">★</button>
-                    <button type="button" onclick="setRating(4)">★</button>
-                    <button type="button" onclick="setRating(5)">★</button>
-                </div>
+                feedbackArea.innerHTML = `
+                    <div class="feedback-form">
+                        <div style="margin-bottom:10px;color:#91aaa0">
+                            Your assessment is complete. Leave a quick review:
+                        </div>
 
-                <input
-                    id="feedbackName"
-                    maxlength="80"
-                    placeholder="Display name (optional)"
-                >
+                        <div class="feedback-stars" id="stars" aria-label="Rating from 1 to 5 stars">
+                            <button type="button" aria-label="1 star" onclick="setRating(1)">★</button>
+                            <button type="button" aria-label="2 stars" onclick="setRating(2)">★</button>
+                            <button type="button" aria-label="3 stars" onclick="setRating(3)">★</button>
+                            <button type="button" aria-label="4 stars" onclick="setRating(4)">★</button>
+                            <button type="button" aria-label="5 stars" onclick="setRating(5)">★</button>
+                        </div>
 
-                <textarea
-                    id="feedbackMessage"
-                    maxlength="1000"
-                    placeholder="Tell us about your experience..."
-                    style="margin-top:10px"
-                ></textarea>
+                        <input
+                            id="feedbackName"
+                            maxlength="80"
+                            placeholder="Display name (optional)"
+                            autocomplete="name"
+                        >
 
-                <button
-                    onclick="submitFeedback()"
-                    style="margin-top:10px;padding:11px 16px;background:#00ff9c;color:#001b11;border:0;border-radius:8px;font-weight:800"
-                >
-                    SUBMIT FEEDBACK
-                </button>
-            `;
+                        <textarea
+                            id="feedbackMessage"
+                            maxlength="1000"
+                            placeholder="Tell us about your experience..."
+                        ></textarea>
+
+                        <button
+                            type="button"
+                            onclick="submitFeedback()"
+                            style="margin-top:10px;padding:11px 16px;background:#ffd84d;color:#171200;border:0;border-radius:8px;font-weight:900"
+                        >
+                            SUBMIT FEEDBACK
+                        </button>
+                    </div>
+                `;
+            }
         }
 
         const findings =
