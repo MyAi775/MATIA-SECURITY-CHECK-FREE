@@ -74,11 +74,23 @@ COOKIE_SECURE = (
 # FLASK
 # ============================================================
 app = Flask(__name__)
-@app.route("/googled6013c64975ddc7c.html")
-def google_search_console_verification():
-    return "google-site-verification: googled6013c64975ddc7c.html"
-
-app.config.update(
+@app.route("/sitemap.xml")
+def sitemap():
+    return Response(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/</loc>
+    </url>
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/how-it-works</loc>
+    </url>
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/request</loc>
+    </url>
+</urlset>""",
+        mimetype="application/xml"
+    )
     SECRET_KEY=SECRET_KEY,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
