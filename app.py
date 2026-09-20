@@ -1,13 +1,11 @@
 import os
 import re
-import json
 import hmac
-import time
-import secrets
+import json
 import sqlite3
+import secrets
 from datetime import datetime, timezone
 from functools import wraps
-from urllib.parse import urlparse
 
 from flask import (
     Flask,
@@ -15,11 +13,39 @@ from flask import (
     redirect,
     url_for,
     session,
-    jsonify,
     render_template_string,
+    jsonify,
     abort,
+    Response,
 )
-from werkzeug.middleware.proxy_fix import ProxyFix
+from markupsafe import escape
+
+app = Flask(__name__)
+
+# Google Search Console verification
+@app.route("/googled6013c64975ddc7c.html")
+def google_search_console_verification():
+    return "google-site-verification: googled6013c64975ddc7c.html"
+
+# Google sitemap
+@app.route("/sitemap.xml")
+def sitemap():
+    return Response(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/</loc>
+    </url>
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/how-it-works</loc>
+    </url>
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/request</loc>
+    </url>
+</urlset>""",
+        mimetype="application/xml",
+    )
+
 
 
 # ============================================================
