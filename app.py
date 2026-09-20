@@ -4,8 +4,10 @@ import hmac
 import json
 import sqlite3
 import secrets
+import time
 from datetime import datetime, timezone
 from functools import wraps
+from urllib.parse import urlparse
 
 from flask import (
     Flask,
@@ -19,34 +21,7 @@ from flask import (
     Response,
 )
 from markupsafe import escape
-
-app = Flask(__name__)
-
-# Google Search Console verification
-@app.route("/googled6013c64975ddc7c.html")
-def google_search_console_verification():
-    return "google-site-verification: googled6013c64975ddc7c.html"
-
-# Google sitemap
-@app.route("/sitemap.xml")
-def sitemap():
-    return Response(
-        """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-    <url>
-        <loc>https://matia-security-check-free.onrender.com/</loc>
-    </url>
-    <url>
-        <loc>https://matia-security-check-free.onrender.com/how-it-works</loc>
-    </url>
-    <url>
-        <loc>https://matia-security-check-free.onrender.com/request</loc>
-    </url>
-</urlset>""",
-        mimetype="application/xml",
-    )
-
-
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ============================================================
 # MATIA // SECURITY CHECK
@@ -95,28 +70,13 @@ COOKIE_SECURE = (
     in ("1", "true", "yes", "on")
 )
 
-
 # ============================================================
 # FLASK
 # ============================================================
+
 app = Flask(__name__)
-@app.route("/sitemap.xml")
-def sitemap():
-    return Response(
-        """<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-    <url>
-        <loc>https://matia-security-check-free.onrender.com/</loc>
-    </url>
-    <url>
-        <loc>https://matia-security-check-free.onrender.com/how-it-works</loc>
-    </url>
-    <url>
-        <loc>https://matia-security-check-free.onrender.com/request</loc>
-    </url>
-</urlset>""",
-        mimetype="application/xml"
-    )
+
+app.config.update(
     SECRET_KEY=SECRET_KEY,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -131,6 +91,29 @@ app.wsgi_app = ProxyFix(
     x_host=1,
 )
 
+# ============================================================
+# GOOGLE SEARCH CONSOLE
+# ============================================================
+
+@app.route("/googled6013c64975ddc7c.html")
+def google_search_console_verification():
+    return "google-site-verification: googled6013c64975ddc7c.html"
+
+@app.route("/sitemap.xml")
+def sitemap():
+    xml = """<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/</loc>
+    </url>
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/how-it-works</loc>
+    </url>
+    <url>
+        <loc>https://matia-security-check-free.onrender.com/request</loc>
+    </url>
+</urlset>"""
+    return Response(xml, mimetype="application/xml")
 
 # ============================================================
 # HELPERS
