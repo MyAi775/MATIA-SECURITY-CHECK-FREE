@@ -115,6 +115,16 @@ def sitemap():
 </urlset>"""
     return Response(xml, mimetype="application/xml")
 
+@app.route("/robots.txt")
+def robots():
+    return Response(
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Sitemap: https://matia-security-check-free.onrender.com/sitemap.xml\n",
+        mimetype="text/plain",
+    )
+
+
 # ============================================================
 # HELPERS
 # ============================================================
