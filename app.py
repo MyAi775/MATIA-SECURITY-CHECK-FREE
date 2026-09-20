@@ -1457,15 +1457,22 @@ let selectedRating = 0;
 
 function setRating(value){
     selectedRating = value;
-    const buttons = document.querySelectorAll("#stars button");
-    buttons.forEach((button,index)=>{
-        button.style.color = index < value ? "#00ff9c" : "#4b635a";
-    });
+
+    document
+        .querySelectorAll("#stars button")
+        .forEach((button,index)=>{
+            button.style.color =
+                index < value ? "#00ff9c" : "#4b635a";
+        });
 }
 
 async function submitFeedback(){
-    const message = document.getElementById("feedbackMessage")?.value.trim();
-    const displayName = document.getElementById("feedbackName")?.value.trim();
+
+    const message =
+        document.getElementById("feedbackMessage")?.value.trim();
+
+    const displayName =
+        document.getElementById("feedbackName")?.value.trim();
 
     if(!selectedRating){
         alert("Please select a rating.");
@@ -1478,11 +1485,14 @@ async function submitFeedback(){
     }
 
     try{
+
         const response = await fetch(
             `/api/client/${requestId}/feedback`,
             {
                 method:"POST",
-                headers:{"Content-Type":"application/json"},
+                headers:{
+                    "Content-Type":"application/json"
+                },
                 body:JSON.stringify({
                     token:token,
                     rating:selectedRating,
@@ -1501,11 +1511,13 @@ async function submitFeedback(){
 
         await loadData();
         alert("Feedback submitted. Thank you!");
+
     }catch(e){
         console.error(e);
         alert("Could not submit feedback.");
     }
 }
+
 
 async function loadData(){
 
@@ -1591,24 +1603,28 @@ async function loadData(){
         const feedbackArea =
             document.getElementById("feedbackArea");
 
-        const existingFeedback =
-            data.feedback;
+        if(data.feedback){
 
-        if(existingFeedback){
             feedbackArea.innerHTML = `
                 <div style="color:#00ff9c;font-size:20px">
-                    ${"★".repeat(existingFeedback.rating)}${"☆".repeat(5-existingFeedback.rating)}
+                    ${"★".repeat(data.feedback.rating)}
+                    ${"☆".repeat(5-data.feedback.rating)}
                 </div>
-                <p>${escapeHtml(existingFeedback.message)}</p>
+
+                <p>${escapeHtml(data.feedback.message)}</p>
+
                 <div style="color:#71877e">
-                    — ${escapeHtml(existingFeedback.display_name)}
+                    — ${escapeHtml(data.feedback.display_name)}
                 </div>
             `;
+
         }else if(data.request.status === "COMPLETED"){
+
             feedbackArea.innerHTML = `
                 <div style="margin-bottom:10px;color:#91aaa0">
                     Your assessment is complete. Leave a quick review:
                 </div>
+
                 <div id="stars" style="font-size:30px;margin-bottom:10px">
                     <button type="button" onclick="setRating(1)">★</button>
                     <button type="button" onclick="setRating(2)">★</button>
@@ -1616,9 +1632,26 @@ async function loadData(){
                     <button type="button" onclick="setRating(4)">★</button>
                     <button type="button" onclick="setRating(5)">★</button>
                 </div>
-                <input id="feedbackName" maxlength="80" placeholder="Display name (optional)" style="width:100%;padding:12px;background:#020303;color:#d8fff0;border:1px solid #173d30;border-radius:8px">
-                <textarea id="feedbackMessage" maxlength="1000" placeholder="Tell us about your experience..." style="width:100%;min-height:100px;margin-top:10px;padding:12px;background:#020303;color:#d8fff0;border:1px solid #173d30;border-radius:8px"></textarea>
-                <button onclick="submitFeedback()" style="margin-top:10px;padding:11px 16px;background:#00ff9c;color:#001b11;border:0;border-radius:8px;font-weight:800">SUBMIT FEEDBACK</button>
+
+                <input
+                    id="feedbackName"
+                    maxlength="80"
+                    placeholder="Display name (optional)"
+                >
+
+                <textarea
+                    id="feedbackMessage"
+                    maxlength="1000"
+                    placeholder="Tell us about your experience..."
+                    style="margin-top:10px"
+                ></textarea>
+
+                <button
+                    onclick="submitFeedback()"
+                    style="margin-top:10px;padding:11px 16px;background:#00ff9c;color:#001b11;border:0;border-radius:8px;font-weight:800"
+                >
+                    SUBMIT FEEDBACK
+                </button>
             `;
         }
 
@@ -1834,7 +1867,7 @@ def client_data(request_id):
                     (request_id,),
                 ))
                 if query_one(
-                    "SELECT 1 AS ok FROM feedback WHERE request_id = ?",
+                    "SELECT id FROM feedback WHERE request_id = ?",
                     (request_id,),
                 )
                 else None
@@ -1911,6 +1944,7 @@ def client_message(request_id):
 
 @app.post("/api/client/<int:request_id>/feedback")
 def client_feedback(request_id):
+
     data = request.get_json(silent=True) or {}
 
     token = clean_text(data.get("token"), 300)
@@ -2624,3 +2658,2755 @@ label{
 
 .chat{
     height:430px;
+    overflow-y:auto;
+    background:#010302;
+    border:1px solid #123a2c;
+    border-radius:10px;
+    padding:15px;
+}
+
+.message{
+    margin:8px 0;
+    padding:10px 12px;
+    background:#06100c;
+    border-left:3px solid #1b4937;
+}
+
+.message.client{
+    border-left-color:#00ff9c;
+}
+
+.message.system{
+    border-left-color:#ffe45c;
+}
+
+.sender{
+    color:#00ff9c;
+    font-family:Consolas,monospace;
+    font-size:12px;
+}
+
+.time{
+    color:#5c746b;
+    font-size:11px;
+}
+
+.compose{
+    display:flex;
+    gap:8px;
+    margin-top:10px;
+}
+
+.compose input{
+    flex:1;
+}
+
+.terminal{
+    background:#010302;
+    border:1px solid #00ff9c;
+    border-radius:10px;
+    padding:15px;
+    box-shadow:
+        inset 0 0 35px rgba(0,255,156,.03),
+        0 0 25px rgba(0,255,156,.05);
+}
+
+.terminal-output{
+    height:430px;
+    overflow:auto;
+    white-space:pre-wrap;
+    font-family:Consolas,monospace;
+    color:#7dffc2;
+}
+
+.terminal-input{
+    display:flex;
+    gap:8px;
+    margin-top:10px;
+}
+
+.terminal-input input{
+    font-family:Consolas,monospace;
+}
+
+.notification{
+    position:fixed;
+    right:20px;
+    bottom:20px;
+    z-index:99;
+    width:min(380px,90%);
+    padding:15px;
+    background:#06100c;
+    border:1px solid #00ff9c;
+    border-radius:10px;
+    display:none;
+}
+
+@media(max-width:700px){
+    .nav{
+        align-items:flex-start;
+        gap:12px;
+        flex-direction:column;
+    }
+}
+
+</style>
+"""
+
+
+# ============================================================
+# STAFF JAVASCRIPT
+# ============================================================
+
+STAFF_JS = """
+<script>
+
+let audioCtx = null;
+
+let ringEnabled =
+    localStorage.getItem("matia_ring") === "1";
+
+let notificationCursor =
+    Number(
+        localStorage.getItem(
+            "matia_notification_cursor"
+        ) || "0"
+    );
+
+
+async function enableRing(){
+
+    try{
+
+        if("Notification" in window){
+            await Notification.requestPermission();
+        }
+
+        const AC =
+            window.AudioContext ||
+            window.webkitAudioContext;
+
+        if(AC){
+
+            if(!audioCtx){
+                audioCtx = new AC();
+            }
+
+            if(audioCtx.state === "suspended"){
+                await audioCtx.resume();
+            }
+
+            playRing();
+        }
+
+        localStorage.setItem(
+            "matia_ring",
+            "1"
+        );
+
+        ringEnabled = true;
+
+        showToast(
+            "RING ENABLED",
+            "Browser notifications and sound are enabled."
+        );
+
+    }catch(error){
+
+        console.error(error);
+
+        showToast(
+            "RING ERROR",
+            "Browser audio permission was not granted."
+        );
+    }
+}
+
+
+function playRing(){
+
+    if(!ringEnabled || !audioCtx){
+        return;
+    }
+
+    try{
+
+        const osc =
+            audioCtx.createOscillator();
+
+        const gain =
+            audioCtx.createGain();
+
+        osc.type = "square";
+        osc.frequency.value = 900;
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        const t =
+            audioCtx.currentTime;
+
+        gain.gain.setValueAtTime(
+            0.0001,
+            t
+        );
+
+        gain.gain.exponentialRampToValueAtTime(
+            0.13,
+            t + .03
+        );
+
+        gain.gain.exponentialRampToValueAtTime(
+            0.0001,
+            t + .35
+        );
+
+        osc.start(t);
+        osc.stop(t + .4);
+
+    }catch(error){}
+}
+
+
+function browserNotify(title,body){
+
+    if(
+        "Notification" in window &&
+        Notification.permission === "granted"
+    ){
+
+        try{
+
+            new Notification(
+                title,
+                {
+                    body:body,
+                    tag:"matia-security-check"
+                }
+            );
+
+        }catch(error){}
+    }
+}
+
+
+function eventNotify(title,body){
+
+    playRing();
+    browserNotify(title,body);
+}
+
+
+function showToast(title,body){
+
+    const box =
+        document.getElementById("notification");
+
+    if(!box){
+        return;
+    }
+
+    box.innerHTML =
+        `<b>${escapeHtml(title)}</b>
+         <div style="margin-top:5px">
+         ${escapeHtml(body)}
+         </div>`;
+
+    box.style.display = "block";
+
+    setTimeout(
+        () => {
+            box.style.display = "none";
+        },
+        5000
+    );
+}
+
+
+function escapeHtml(value){
+
+    return String(value)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+}
+
+
+async function pollNotifications(){
+
+    try{
+
+        const response =
+            await fetch(
+                `/api/staff/notifications?after=${notificationCursor}`,
+                {
+                    cache:"no-store"
+                }
+            );
+
+        if(!response.ok){
+            return;
+        }
+
+        const data =
+            await response.json();
+
+        for(const item of data.notifications){
+
+            notificationCursor =
+                Math.max(
+                    notificationCursor,
+                    item.id
+                );
+
+            eventNotify(
+                item.title,
+                item.body
+            );
+
+            showToast(
+                item.title,
+                item.body
+            );
+        }
+
+        localStorage.setItem(
+            "matia_notification_cursor",
+            String(notificationCursor)
+        );
+
+    }catch(error){
+
+        console.error(error);
+    }
+}
+
+
+setInterval(
+    pollNotifications,
+    1000
+);
+
+pollNotifications();
+
+</script>
+"""
+
+
+# ============================================================
+# STAFF DASHBOARD
+# ============================================================
+
+STAFF_DASHBOARD = """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{{ title }}</title>
+""" + STAFF_STYLE + """
+</head>
+
+<body>
+
+<div class="nav">
+
+<div class="logo">
+MATIA // {{ role_name|upper }} CONTROL
+</div>
+
+<div class="navlinks">
+
+<a href="{{ dashboard_url }}">Dashboard</a>
+
+{% if role_name == "owner" %}
+<a href="/owner/terminal">Terminal</a>
+{% endif %}
+
+<button onclick="enableRing()">
+🔔 ENABLE RING
+</button>
+
+<a href="/logout">
+Logout
+</a>
+
+</div>
+
+</div>
+
+<div class="container">
+
+<div class="card">
+
+<h1>
+// {{ role_name|upper }} DASHBOARD
+</h1>
+
+<p class="muted">
+Authenticated as {{ email }}
+</p>
+
+</div>
+
+<div class="grid" style="margin-top:15px">
+
+<div class="card">
+<div class="muted">TOTAL</div>
+<div class="stat">{{ stats.TOTAL }}</div>
+</div>
+
+<div class="card">
+<div class="muted">PENDING</div>
+<div class="stat">{{ stats.PENDING }}</div>
+</div>
+
+<div class="card">
+<div class="muted">ACCEPTED</div>
+<div class="stat">{{ stats.ACCEPTED }}</div>
+</div>
+
+<div class="card">
+<div class="muted">IN PROGRESS</div>
+<div class="stat">{{ stats["IN PROGRESS"] }}</div>
+</div>
+
+<div class="card">
+<div class="muted">COMPLETED</div>
+<div class="stat">{{ stats.COMPLETED }}</div>
+</div>
+
+<div class="card">
+<div class="muted">DECLINED</div>
+<div class="stat">{{ stats.DECLINED }}</div>
+</div>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<h2>// CLIENT REQUESTS</h2>
+
+<div class="table-wrap">
+
+<table>
+
+<thead>
+
+<tr>
+<th>ID</th>
+<th>NAME</th>
+<th>EMAIL</th>
+<th>PROJECT</th>
+<th>TARGET</th>
+<th>STATUS</th>
+<th>UPDATED</th>
+<th>ACTION</th>
+</tr>
+
+</thead>
+
+<tbody>
+
+{% for item in requests %}
+
+<tr>
+
+<td>#{{ item.id }}</td>
+
+<td>{{ item.name }}</td>
+
+<td>{{ item.email }}</td>
+
+<td>{{ item.web_name }}</td>
+
+<td>{{ item.target }}</td>
+
+<td>
+<span class="badge">
+{{ item.status }}
+</span>
+</td>
+
+<td>{{ item.updated_at }}</td>
+
+<td>
+<a
+    class="btn"
+    href="/admin/client/{{ item.id }}"
+>
+OPEN
+</a>
+</td>
+
+</tr>
+
+{% else %}
+
+<tr>
+<td colspan="8">
+No requests.
+</td>
+</tr>
+
+{% endfor %}
+
+</tbody>
+
+</table>
+
+</div>
+
+</div>
+
+</div>
+
+<div id="notification" class="notification"></div>
+
+""" + STAFF_JS + """
+
+<script>
+
+setTimeout(
+    () => location.reload(),
+    15000
+);
+
+</script>
+
+</body>
+</html>
+"""
+
+
+@app.get("/admin")
+@staff_required
+def admin_dashboard():
+
+    items = query_all(
+        """
+        SELECT *
+        FROM requests
+        ORDER BY id DESC
+        """
+    )
+
+    return render_template_string(
+        STAFF_DASHBOARD,
+        title="Staff Dashboard",
+        role_name=current_role(),
+        email=session.get("email", ""),
+        stats=stats(),
+        requests=items,
+        dashboard_url="/owner" if is_owner() else "/admin",
+        app_name=APP_NAME,
+    )
+
+
+@app.get("/owner")
+@role_required("owner")
+def owner_dashboard():
+
+    items = query_all(
+        """
+        SELECT *
+        FROM requests
+        ORDER BY id DESC
+        """
+    )
+
+    return render_template_string(
+        STAFF_DASHBOARD,
+        title="Owner Dashboard",
+        role_name="owner",
+        email=session.get("email", ""),
+        stats=stats(),
+        requests=items,
+        dashboard_url="/owner",
+        app_name=APP_NAME,
+    )
+
+
+# ============================================================
+# STAFF CLIENT DETAIL
+# ============================================================
+
+STAFF_DETAIL = """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Client #{{ item.id }}</title>
+""" + STAFF_STYLE + """
+</head>
+
+<body>
+
+<div class="nav">
+
+<div class="logo">
+MATIA // CLIENT #{{ item.id }}
+</div>
+
+<div class="navlinks">
+
+<a href="{{ dashboard_url }}">
+Dashboard
+</a>
+
+<button onclick="enableRing()">
+🔔 ENABLE RING
+</button>
+
+<a href="/logout">
+Logout
+</a>
+
+</div>
+
+</div>
+
+<div class="container">
+
+<div class="grid">
+
+<div class="card">
+<div class="muted">CLIENT</div>
+<h2>{{ item.name }}</h2>
+<p>{{ item.email }}</p>
+</div>
+
+<div class="card">
+<div class="muted">PROJECT</div>
+<h2>{{ item.web_name }}</h2>
+<p>{{ item.target }}</p>
+</div>
+
+<div class="card">
+<div class="muted">STATUS</div>
+<h2 id="status">{{ item.status }}</h2>
+</div>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<h2>// CONTROL</h2>
+
+<div class="form-row">
+
+<button
+class="btn"
+onclick="setStatus('ACCEPTED')"
+>
+ACCEPT
+</button>
+
+<button
+class="btn danger"
+onclick="setStatus('DECLINED')"
+>
+DECLINE
+</button>
+
+<button
+class="btn"
+onclick="setStatus('IN PROGRESS')"
+>
+START
+</button>
+
+<button
+class="btn"
+onclick="setStatus('COMPLETED')"
+>
+COMPLETE
+</button>
+
+<button
+class="btn"
+onclick="setStatus('PENDING')"
+>
+REOPEN
+</button>
+
+</div>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<h2>// AUTHORIZED SCOPE</h2>
+
+<pre style="white-space:pre-wrap;color:#9eb8ae">
+{{ item.scope }}
+</pre>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<h2>// LIVE CHAT</h2>
+
+<div id="chat" class="chat"></div>
+
+<div class="compose">
+
+<input
+id="message"
+maxlength="4000"
+placeholder="Message client..."
+>
+
+<button
+class="btn"
+onclick="sendMessage()"
+>
+SEND
+</button>
+
+</div>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<h2>// ADD FINDING</h2>
+
+<form onsubmit="addFinding(event)">
+
+<div class="form-group">
+<label>Title</label>
+<input
+id="finding_title"
+maxlength="300"
+required
+>
+</div>
+
+<div class="form-group">
+<label>Severity</label>
+
+<select id="finding_severity">
+
+<option>INFO</option>
+<option>LOW</option>
+<option>MEDIUM</option>
+<option>HIGH</option>
+<option>CRITICAL</option>
+
+</select>
+
+</div>
+
+<div class="form-group">
+<label>Description</label>
+<textarea
+id="finding_description"
+maxlength="5000"
+required
+></textarea>
+</div>
+
+<div class="form-group">
+<label>Evidence</label>
+<textarea
+id="finding_evidence"
+maxlength="8000"
+required
+></textarea>
+</div>
+
+<div class="form-group">
+<label>Recommendation</label>
+<textarea
+id="finding_recommendation"
+maxlength="5000"
+required
+></textarea>
+</div>
+
+<button class="btn" type="submit">
+ADD FINDING
+</button>
+
+</form>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<h2>// FINDINGS</h2>
+
+<div id="findings">
+Loading...
+</div>
+
+</div>
+
+<div id="notification" class="notification"></div>
+
+</div>
+
+""" + STAFF_JS + """
+
+<script>
+
+const requestId =
+    {{ item.id|tojson }};
+
+let lastMessageId = 0;
+let firstLoad = true;
+
+
+function escapeHtml(value){
+
+    return String(value)
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+}
+
+
+async function loadClient(){
+
+    try{
+
+        const response =
+            await fetch(
+                `/api/staff/client/${requestId}/data`,
+                {
+                    cache:"no-store"
+                }
+            );
+
+        if(!response.ok){
+            return;
+        }
+
+        const data =
+            await response.json();
+
+        document.getElementById("status")
+            .textContent =
+                data.request.status;
+
+        const chat =
+            document.getElementById("chat");
+
+        let html = "";
+
+        for(const msg of data.messages){
+
+            let cls = "";
+
+            if(msg.sender === "CLIENT"){
+                cls = "client";
+            }
+
+            if(msg.sender === "SYSTEM"){
+                cls = "system";
+            }
+
+            html += `
+                <div class="message ${cls}">
+                    <div class="sender">
+                        ${escapeHtml(msg.sender)}
+                    </div>
+
+                    <div>
+                        ${escapeHtml(msg.message)}
+                    </div>
+
+                    <div class="time">
+                        ${escapeHtml(msg.created_at)}
+                    </div>
+                </div>
+            `;
+
+            if(
+                !firstLoad &&
+                lastMessageId &&
+                msg.id > lastMessageId &&
+                msg.sender === "CLIENT"
+            ){
+
+                eventNotify(
+                    "NEW CLIENT MESSAGE",
+                    msg.message
+                );
+
+                showToast(
+                    "NEW CLIENT MESSAGE",
+                    msg.message
+                );
+            }
+        }
+
+        if(data.messages.length){
+
+            lastMessageId =
+                data.messages[
+                    data.messages.length - 1
+                ].id;
+        }
+
+        chat.innerHTML =
+            html || "No messages yet.";
+
+        chat.scrollTop =
+            chat.scrollHeight;
+
+        let findingsHtml = "";
+
+        for(const finding of data.findings){
+
+            findingsHtml += `
+                <div class="card"
+                     style="margin:10px 0">
+
+                    <h3>
+                        ${escapeHtml(finding.title)}
+                    </h3>
+
+                    <div class="badge">
+                        ${escapeHtml(finding.severity)}
+                    </div>
+
+                    <p>
+                        ${escapeHtml(finding.description)}
+                    </p>
+
+                    <p>
+                        <b>Evidence:</b>
+                    </p>
+
+                    <pre style="white-space:pre-wrap">
+${escapeHtml(finding.evidence)}
+                    </pre>
+
+                    <p>
+                        <b>Recommendation:</b>
+                    </p>
+
+                    <p>
+                        ${escapeHtml(
+                            finding.recommendation
+                        )}
+                    </p>
+
+                </div>
+            `;
+        }
+
+        document.getElementById("findings")
+            .innerHTML =
+                findingsHtml ||
+                "No findings.";
+
+        firstLoad = false;
+
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+
+async function setStatus(status){
+
+    try{
+
+        const response =
+            await fetch(
+                `/staff/client/${requestId}/status`,
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":"application/json"
+                    },
+                    body:JSON.stringify({
+                        status:status
+                    })
+                }
+            );
+
+        if(response.ok){
+
+            await loadClient();
+
+            showToast(
+                "STATUS UPDATED",
+                status
+            );
+        }
+
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+
+async function sendMessage(){
+
+    const input =
+        document.getElementById("message");
+
+    const message =
+        input.value.trim();
+
+    if(!message){
+        return;
+    }
+
+    input.value = "";
+
+    try{
+
+        const response =
+            await fetch(
+                `/staff/client/${requestId}/message`,
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":"application/json"
+                    },
+                    body:JSON.stringify({
+                        message:message
+                    })
+                }
+            );
+
+        if(response.ok){
+            await loadClient();
+        }
+
+    }catch(error){
+
+        console.error(error);
+    }
+}
+
+
+async function addFinding(event){
+
+    event.preventDefault();
+
+    const payload = {
+        title:
+            document.getElementById(
+                "finding_title"
+            ).value,
+
+        severity:
+            document.getElementById(
+                "finding_severity"
+            ).value,
+
+        description:
+            document.getElementById(
+                "finding_description"
+            ).value,
+
+        evidence:
+            document.getElementById(
+                "finding_evidence"
+            ).value,
+
+        recommendation:
+            document.getElementById(
+                "finding_recommendation"
+            ).value
+    };
+
+    try{
+
+        const response =
+            await fetch(
+                `/staff/client/${requestId}/finding`,
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":"application/json"
+                    },
+                    body:JSON.stringify(payload)
+                }
+            );
+
+        if(response.ok){
+
+            document
+                .querySelector(
+                    "form"
+                )
+                .reset();
+
+            await loadClient();
+
+            showToast(
+                "FINDING ADDED",
+                "Security finding created."
+            );
+        }
+
+    }catch(error){
+
+        console.error(error);
+
+    }
+}
+
+
+document
+    .getElementById("message")
+    .addEventListener(
+        "keydown",
+        function(event){
+
+            if(event.key === "Enter"){
+                sendMessage();
+            }
+
+        }
+    );
+
+
+loadClient();
+
+setInterval(
+    loadClient,
+    1000
+);
+
+</script>
+
+</body>
+</html>
+"""
+
+
+@app.get("/admin/client/<int:request_id>")
+@staff_required
+def staff_client(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        abort(404)
+
+    return render_template_string(
+        STAFF_DETAIL,
+        item=item,
+        dashboard_url="/owner" if is_owner() else "/admin",
+    )
+
+
+# ============================================================
+# STAFF CLIENT DATA
+# ============================================================
+
+@app.get("/api/staff/client/<int:request_id>/data")
+@staff_required
+def staff_client_data(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        return jsonify(
+            {
+                "error": "not_found"
+            }
+        ), 404
+
+    messages = query_all(
+        """
+        SELECT id, sender, message, created_at
+        FROM messages
+        WHERE request_id = ?
+        ORDER BY id ASC
+        """,
+        (request_id,),
+    )
+
+    findings = query_all(
+        """
+        SELECT *
+        FROM findings
+        WHERE request_id = ?
+        ORDER BY id ASC
+        """,
+        (request_id,),
+    )
+
+    return jsonify(
+        {
+            "request": dict(item),
+            "messages": [dict(x) for x in messages],
+            "findings": [dict(x) for x in findings],
+        }
+    )
+
+
+# ============================================================
+# STAFF STATUS
+# ============================================================
+
+@app.post("/staff/client/<int:request_id>/status")
+@staff_required
+def staff_status(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        return jsonify(
+            {
+                "error": "not_found"
+            }
+        ), 404
+
+    data = request.get_json(silent=True) or {}
+
+    status = clean_text(
+        data.get("status"),
+        50,
+    )
+
+    if status not in STATUSES:
+        return jsonify(
+            {
+                "error": "invalid_status"
+            }
+        ), 400
+
+    execute(
+        """
+        UPDATE requests
+        SET status = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            status,
+            now(),
+            request_id,
+        ),
+    )
+
+    system_message(
+        request_id,
+        f"Request status changed to {status}.",
+    )
+
+    notify(
+        "client",
+        "status_change",
+        "REQUEST STATUS UPDATED",
+        f"Your request is now {status}.",
+        request_id,
+    )
+
+    audit_action(
+        session.get("email", "STAFF"),
+        "status_change",
+        f"request_id={request_id}; status={status}",
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "status": status,
+        }
+    )
+
+
+# ============================================================
+# STAFF MESSAGE
+# ============================================================
+
+@app.post("/staff/client/<int:request_id>/message")
+@staff_required
+def staff_message(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        return jsonify(
+            {
+                "error": "not_found"
+            }
+        ), 404
+
+    data = request.get_json(silent=True) or {}
+
+    message = clean_text(
+        data.get("message"),
+        4000,
+    )
+
+    if not message:
+        return jsonify(
+            {
+                "error": "message_required"
+            }
+        ), 400
+
+    execute(
+        """
+        INSERT INTO messages
+        (request_id, sender, message, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            "STAFF",
+            message,
+            now(),
+        ),
+    )
+
+    notify(
+        "client",
+        "staff_message",
+        "NEW STAFF MESSAGE",
+        message[:300],
+        request_id,
+    )
+
+    audit_action(
+        session.get("email", "STAFF"),
+        "staff_message",
+        f"request_id={request_id}",
+    )
+
+    return jsonify(
+        {
+            "ok": True
+        }
+    )
+
+
+# ============================================================
+# FINDING
+# ============================================================
+
+@app.post("/staff/client/<int:request_id>/finding")
+@staff_required
+def staff_finding(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        return jsonify(
+            {
+                "error": "not_found"
+            }
+        ), 404
+
+    data = request.get_json(silent=True) or {}
+
+    title = clean_text(
+        data.get("title"),
+        300,
+    )
+
+    severity = clean_text(
+        data.get("severity"),
+        30,
+    )
+
+    description = clean_text(
+        data.get("description"),
+        5000,
+    )
+
+    evidence = clean_text(
+        data.get("evidence"),
+        8000,
+    )
+
+    recommendation = clean_text(
+        data.get("recommendation"),
+        5000,
+    )
+
+    if not title:
+        return jsonify(
+            {
+                "error": "title_required"
+            }
+        ), 400
+
+    if severity not in SEVERITIES:
+        return jsonify(
+            {
+                "error": "invalid_severity"
+            }
+        ), 400
+
+    if not description:
+        return jsonify(
+            {
+                "error": "description_required"
+            }
+        ), 400
+
+    finding_id = execute(
+        """
+        INSERT INTO findings
+        (
+            request_id,
+            title,
+            severity,
+            description,
+            evidence,
+            recommendation,
+            created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            request_id,
+            title,
+            severity,
+            description,
+            evidence,
+            recommendation,
+            now(),
+        ),
+    )
+
+    notify(
+        "client",
+        "finding",
+        "NEW SECURITY FINDING",
+        title,
+        request_id,
+    )
+
+    audit_action(
+        session.get("email", "STAFF"),
+        "finding_created",
+        f"request_id={request_id}; finding_id={finding_id}",
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "finding_id": finding_id,
+        }
+    )
+
+
+# ============================================================
+# STAFF REPORT
+# ============================================================
+
+@app.get("/staff/client/<int:request_id>/report")
+@staff_required
+def staff_report(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        abort(404)
+
+    findings = query_all(
+        """
+        SELECT *
+        FROM findings
+        WHERE request_id = ?
+        ORDER BY id ASC
+        """,
+        (request_id,),
+    )
+
+    return render_template_string(
+        REPORT_PAGE,
+        item=item,
+        findings=findings,
+    )
+
+
+# ============================================================
+# STAFF NOTIFICATIONS
+# ============================================================
+
+@app.get("/api/staff/notifications")
+@staff_required
+def staff_notifications():
+
+    after = safe_int(
+        request.args.get("after"),
+        0,
+    )
+
+    rows = query_all(
+        """
+        SELECT
+            id,
+            request_id,
+            kind,
+            title,
+            body,
+            created_at
+        FROM notifications
+        WHERE audience = 'staff'
+        AND id > ?
+        ORDER BY id ASC
+        LIMIT 100
+        """,
+        (after,),
+    )
+
+    return jsonify(
+        {
+            "notifications": [
+                dict(row)
+                for row in rows
+            ]
+        }
+    )
+
+
+# ============================================================
+# COMMAND ENGINE
+# ============================================================
+
+MAINTENANCE_KEY = "maintenance"
+
+
+def get_setting(key, default=""):
+    row = query_one(
+        """
+        SELECT value
+        FROM settings
+        WHERE key = ?
+        """,
+        (key,),
+    )
+
+    if not row:
+        return default
+
+    return row["value"]
+
+
+def set_setting(key, value):
+    execute(
+        """
+        INSERT INTO settings(key,value)
+        VALUES (?,?)
+        ON CONFLICT(key)
+        DO UPDATE SET value=excluded.value
+        """,
+        (
+            key,
+            value,
+        ),
+    )
+
+
+def command_help(owner=False):
+
+    lines = [
+        "MATIA // SECURITY CHECK TERMINAL",
+        "",
+        "CORE:",
+        "  help",
+        "  menu",
+        "  clear",
+        "  version",
+        "  time",
+        "  uptime",
+        "  health",
+        "  system",
+        "",
+        "REQUESTS:",
+        "  clients",
+        "  list",
+        "  all",
+        "  pending",
+        "  accepted",
+        "  active",
+        "  completed",
+        "  declined",
+        "  stats",
+        "  client <id>",
+        "  status <id>",
+        "  request <id>",
+        "",
+        "ACTIONS:",
+        "  accept <id>",
+        "  decline <id>",
+        "  start <id>",
+        "  complete <id>",
+        "  reopen <id>",
+        "  message <id> <text>",
+        "  msg <id> <text>",
+        "",
+        "SECURITY:",
+        "  findings <id>",
+        "  findings-total",
+        "  report <id>",
+        "  search <term>",
+        "",
+        "COMMUNICATION:",
+        "  announce <text>",
+        "  broadcast <text>",
+        "  notify <id> <text>",
+        "",
+    ]
+
+    if owner:
+
+        lines.extend(
+            [
+                "OWNER:",
+                "  audit",
+                "  logs",
+                "  users",
+                "  admins",
+                "  maintenance",
+                "  maintenance on",
+                "  maintenance off",
+                "  maintenance status",
+                "  db",
+                "  database",
+                "  settings",
+                "  ring",
+                "  info",
+                "",
+                "Aliases are supported for many commands.",
+                "This terminal controls the application data",
+                "and does not execute arbitrary OS shell commands.",
+            ]
+        )
+
+    else:
+
+        lines.extend(
+            [
+                "ADMIN:",
+                "  audit",
+                "  logs",
+                "  ring",
+                "",
+            ]
+        )
+
+    return "\n".join(lines)
+
+
+def command_list(status_filter=None):
+
+    if status_filter:
+
+        rows = query_all(
+            """
+            SELECT id,name,email,target,status
+            FROM requests
+            WHERE status = ?
+            ORDER BY id DESC
+            """,
+            (status_filter,),
+        )
+
+    else:
+
+        rows = query_all(
+            """
+            SELECT id,name,email,target,status
+            FROM requests
+            ORDER BY id DESC
+            """
+        )
+
+    if not rows:
+        return "No requests found."
+
+    lines = []
+
+    for row in rows:
+
+        lines.append(
+            f"#{row['id']} | "
+            f"{row['status']:<12} | "
+            f"{row['name']} | "
+            f"{row['target']}"
+        )
+
+    return "\n".join(lines)
+
+
+def command_client(request_id):
+
+    item = get_request(request_id)
+
+    if not item:
+        return "Client/request not found."
+
+    return "\n".join(
+        [
+            f"ID: #{item['id']}",
+            f"Name: {item['name']}",
+            f"Email: {item['email']}",
+            f"Project: {item['web_name']}",
+            f"Target: {item['target']}",
+            f"Status: {item['status']}",
+            f"Created: {item['created_at']}",
+            f"Updated: {item['updated_at']}",
+            "",
+            "AUTHORIZED SCOPE:",
+            item["scope"],
+        ]
+    )
+
+
+def command_findings(request_id):
+
+    rows = query_all(
+        """
+        SELECT id,title,severity
+        FROM findings
+        WHERE request_id = ?
+        ORDER BY id DESC
+        """,
+        (request_id,),
+    )
+
+    if not rows:
+        return "No findings."
+
+    lines = []
+
+    for row in rows:
+
+        lines.append(
+            f"F-{row['id']} | "
+            f"{row['severity']} | "
+            f"{row['title']}"
+        )
+
+    return "\n".join(lines)
+
+
+def change_status_command(request_id, status):
+
+    item = get_request(request_id)
+
+    if not item:
+        return "Client/request not found."
+
+    execute(
+        """
+        UPDATE requests
+        SET status = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            status,
+            now(),
+            request_id,
+        ),
+    )
+
+    system_message(
+        request_id,
+        f"Request status changed to {status}.",
+    )
+
+    notify(
+        "client",
+        "status_change",
+        "REQUEST STATUS UPDATED",
+        f"Your request is now {status}.",
+        request_id,
+    )
+
+    return (
+        f"Request #{request_id} "
+        f"status changed to {status}."
+    )
+
+
+def execute_command(command, owner=False):
+
+    command = clean_text(
+        command,
+        5000,
+    )
+
+    if not command:
+        return ""
+
+    audit_action(
+        session.get("email", "STAFF"),
+        "terminal_command",
+        command[:1000],
+    )
+
+    parts = command.split()
+
+    cmd = parts[0].lower()
+
+    args = parts[1:]
+
+    aliases = {
+        "?": "help",
+        "commands": "help",
+        "ls": "clients",
+        "list": "clients",
+        "all": "clients",
+        "req": "request",
+        "requests": "clients",
+        "active": "inprogress",
+        "in-progress": "inprogress",
+        "in_progress": "inprogress",
+        "find": "search",
+        "msg": "message",
+        "send": "message",
+        "broadcast": "announce",
+        "dbinfo": "db",
+        "db-status": "db",
+        "logs": "audit",
+    }
+
+    cmd = aliases.get(cmd, cmd)
+
+    if cmd == "help":
+        return command_help(owner)
+
+    if cmd == "menu":
+        return command_help(owner)
+
+    if cmd == "clear":
+        return "__CLEAR__"
+
+    if cmd == "version":
+        return (
+            f"{APP_NAME}\n"
+            f"Version: {APP_VERSION}\n"
+            f"Python Flask application"
+        )
+
+    if cmd == "time":
+        return now()
+
+    if cmd == "uptime":
+
+        seconds = uptime_seconds()
+
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+
+        return (
+            f"Uptime: "
+            f"{hours}h "
+            f"{minutes}m "
+            f"{secs}s"
+        )
+
+    if cmd == "health":
+
+        try:
+            row = query_one(
+                "SELECT 1 AS ok"
+            )
+
+            database = (
+                "ONLINE"
+                if row and row["ok"] == 1
+                else "ERROR"
+            )
+
+        except Exception:
+            database = "ERROR"
+
+        return (
+            "APPLICATION: ONLINE\n"
+            f"DATABASE: {database}\n"
+            f"VERSION: {APP_VERSION}\n"
+            f"ROLE: {role()}"
+        )
+
+    if cmd in ("system", "info"):
+
+        return (
+            f"APPLICATION: {APP_NAME}\n"
+            f"VERSION: {APP_VERSION}\n"
+            f"ROLE: {role()}\n"
+            f"TIME: {now()}\n"
+            f"UPTIME: {uptime_seconds()} seconds"
+        )
+
+    if cmd in ("clients",):
+
+        return command_list()
+
+    if cmd == "pending":
+
+        return command_list("PENDING")
+
+    if cmd == "accepted":
+
+        return command_list("ACCEPTED")
+
+    if cmd == "inprogress":
+
+        return command_list("IN PROGRESS")
+
+    if cmd == "completed":
+
+        return command_list("COMPLETED")
+
+    if cmd == "declined":
+
+        return command_list("DECLINED")
+
+    if cmd == "stats":
+
+        s = stats()
+
+        return "\n".join(
+            [
+                f"TOTAL       : {s['TOTAL']}",
+                f"PENDING     : {s['PENDING']}",
+                f"ACCEPTED    : {s['ACCEPTED']}",
+                f"IN PROGRESS : {s['IN PROGRESS']}",
+                f"COMPLETED   : {s['COMPLETED']}",
+                f"DECLINED    : {s['DECLINED']}",
+            ]
+        )
+
+    if cmd in ("client", "request"):
+
+        if not args:
+            return "Usage: client <id>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        return command_client(request_id)
+
+    if cmd == "status":
+
+        if not args:
+            return "Usage: status <id>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        item = get_request(request_id)
+
+        if not item:
+            return "Request not found."
+
+        return (
+            f"#{request_id}: "
+            f"{item['status']}"
+        )
+
+    status_commands = {
+        "accept": "ACCEPTED",
+        "decline": "DECLINED",
+        "start": "IN PROGRESS",
+        "complete": "COMPLETED",
+        "reopen": "PENDING",
+    }
+
+    if cmd in status_commands:
+
+        if not args:
+            return f"Usage: {cmd} <id>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        return change_status_command(
+            request_id,
+            status_commands[cmd],
+        )
+
+    if cmd == "message":
+
+        if len(args) < 2:
+            return "Usage: message <id> <text>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        message = " ".join(args[1:])
+
+        item = get_request(request_id)
+
+        if not item:
+            return "Request not found."
+
+        execute(
+            """
+            INSERT INTO messages
+            (request_id,sender,message,created_at)
+            VALUES (?,?,?,?)
+            """,
+            (
+                request_id,
+                "STAFF",
+                message,
+                now(),
+            ),
+        )
+
+        notify(
+            "client",
+            "staff_message",
+            "NEW STAFF MESSAGE",
+            message[:300],
+            request_id,
+        )
+
+        return (
+            f"Message sent to request #{request_id}."
+        )
+
+    if cmd == "findings":
+
+        if not args:
+            return "Usage: findings <id>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        return command_findings(request_id)
+
+    if cmd == "findings-total":
+
+        row = query_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM findings
+            """
+        )
+
+        return (
+            f"Total findings: "
+            f"{row['total']}"
+        )
+
+    if cmd == "report":
+
+        if not args:
+            return "Usage: report <id>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        item = get_request(request_id)
+
+        if not item:
+            return "Request not found."
+
+        findings_count = query_one(
+            """
+            SELECT COUNT(*) AS total
+            FROM findings
+            WHERE request_id = ?
+            """,
+            (request_id,),
+        )["total"]
+
+        return (
+            f"REPORT #{request_id}\n"
+            f"Target: {item['target']}\n"
+            f"Status: {item['status']}\n"
+            f"Findings: {findings_count}\n"
+            f"URL: /report/{request_id}"
+        )
+
+    if cmd == "search":
+
+        if not args:
+            return "Usage: search <term>"
+
+        term = "%" + " ".join(args) + "%"
+
+        rows = query_all(
+            """
+            SELECT id,name,email,web_name,target,status
+            FROM requests
+            WHERE name LIKE ?
+               OR email LIKE ?
+               OR web_name LIKE ?
+               OR target LIKE ?
+            ORDER BY id DESC
+            LIMIT 100
+            """,
+            (
+                term,
+                term,
+                term,
+                term,
+            ),
+        )
+
+        if not rows:
+            return "No matches."
+
+        return "\n".join(
+            [
+                (
+                    f"#{r['id']} | "
+                    f"{r['name']} | "
+                    f"{r['target']} | "
+                    f"{r['status']}"
+                )
+                for r in rows
+            ]
+        )
+
+    if cmd in ("announce", "broadcast"):
+
+        if not args:
+            return "Usage: announce <text>"
+
+        message = " ".join(args)
+
+        notify(
+            "client",
+            "announcement",
+            "MATIA SECURITY ANNOUNCEMENT",
+            message[:1000],
+            None,
+        )
+
+        return "Announcement sent."
+
+    if cmd == "notify":
+
+        if len(args) < 2:
+            return "Usage: notify <id> <text>"
+
+        request_id = safe_int(args[0])
+
+        if request_id is None:
+            return "Invalid request ID."
+
+        item = get_request(request_id)
+
+        if not item:
+            return "Request not found."
+
+        message = " ".join(args[1:])
+
+        notify(
+            "client",
+            "manual",
+            "MATIA // NOTIFICATION",
+            message,
+            request_id,
+        )
+
+        return (
+            f"Notification sent to #{request_id}."
+        )
+
+    if cmd == "audit":
+
+        rows = query_all(
+            """
+            SELECT actor,action,details,created_at
+            FROM audit_log
+            ORDER BY id DESC
+            LIMIT 50
+            """
+        )
+
+        if not rows:
+            return "No audit entries."
+
+        return "\n".join(
+            [
+                (
+                    f"{r['created_at']} | "
+                    f"{r['actor']} | "
+                    f"{r['action']} | "
+                    f"{r['details'] or ''}"
+                )
+                for r in rows
+            ]
+        )
+
+    if cmd == "users":
+
+        if not owner:
+            return "OWNER ONLY."
+
+        return (
+            "Application staff accounts are configured "
+            "through environment variables.\n"
+            "No credentials are displayed by the terminal."
+        )
+
+    if cmd == "admins":
+
+        if not owner:
+            return "OWNER ONLY."
+
+        return (
+            "Admin authentication is configured "
+            "through MATIA_ADMIN_EMAIL and "
+            "MATIA_ADMIN_PASSWORD."
+        )
+
+    if cmd == "maintenance":
+
+        if not owner:
+            return "OWNER ONLY."
+
+        if not args:
+
+            state = get_setting(
+                MAINTENANCE_KEY,
+                "off",
+            )
+
+            return (
+                f"Maintenance: {state}"
+            )
+
+        action = args[0].lower()
+
+        if action == "status":
+
+            state = get_setting(
+                MAINTENANCE_KEY,
+                "off",
+            )
+
+            return (
+                f"Maintenance: {state}"
+            )
+
+        if action == "on":
+
+            set_setting(
+                MAINTENANCE_KEY,
+                "on",
+            )
+
+            return "Maintenance enabled."
+
+        if action == "off":
+
+            set_setting(
+                MAINTENANCE_KEY,
+                "off",
+            )
+
+            return "Maintenance disabled."
+
+        return (
+            "Usage: maintenance "
+            "[on|off|status]"
+        )
+
+    if cmd in ("db", "database"):
+
+        try:
+
+            row = query_one(
+                "SELECT COUNT(*) AS total FROM requests"
+            )
+
+            messages = query_one(
+                "SELECT COUNT(*) AS total FROM messages"
+            )
+
+            findings = query_one(
+                "SELECT COUNT(*) AS total FROM findings"
+            )
+
+            return (
+                "DATABASE: ONLINE\n"
+                f"Requests: {row['total']}\n"
+                f"Messages: {messages['total']}\n"
+                f"Findings: {findings['total']}"
+            )
+
+        except Exception as exc:
+
+            return (
+                f"DATABASE ERROR: {exc}"
+            )
+
+    if cmd == "settings":
+
+        if not owner:
+            return "OWNER ONLY."
+
+        maintenance = get_setting(
+            MAINTENANCE_KEY,
+            "off",
+        )
+
+        return (
+            f"maintenance={maintenance}"
+        )
+
+    if cmd == "ring":
+
+        return (
+            "Ring is controlled by each "
+            "browser session.\n"
+            "Use ENABLE RING in the dashboard."
+        )
+
+    return (
+        f"Unknown command: {cmd}\n"
+        "Type 'help' for available commands."
+    )
+
+
+# ============================================================
+# TERMINAL PAGE
+# ============================================================
+
+TERMINAL_PAGE = """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MATIA Terminal</title>
+""" + STAFF_STYLE + """
+</head>
+
+<body>
+
+<div class="nav">
+
+<div class="logo">
+MATIA // {{ role_name|upper }} TERMINAL
+</div>
+
+<div class="navlinks">
+
+<a href="{{ dashboard_url }}">
+Dashboard
+</a>
+
+<button onclick="enableRing()">
+🔔 ENABLE RING
+</button>
+
+<a href="/logout">
+Logout
+</a>
+
+</div>
+
+</div>
+
+<div class="container">
+
+<div class="terminal">
+
+<div
+id="output"
+class="terminal-output"
+>
+MATIA // SECURITY CHECK
+Version {{ version }}
+
+Authenticated:
+{{ email }}
+
+Role:
+{{ role_name|upper }}
+
+Type 'help' for commands.
+
+--------------------------------------------------
+</div>
+
+<div class="terminal-input">
+
+<span style="color:#00ff9c">
+root@matia:~$
+</span>
+
+<input
+id="command"
+autocomplete="off"
+autofocus
+placeholder="type command..."
+>
+
+<button
+class="btn"
+onclick="runCommand()"
+>
+EXEC
+</button>
+
+</div>
+
+</div>
+
+<div class="card" style="margin-top:15px">
+
+<b>OWNER TERMINAL</b>
+
+<p class="muted">
+Application-control terminal. It intentionally does
+not execute arbitrary operating-system shell commands.
+</p>
+
+</div>
+
+</div>
+
+<div id="notification" class="notification"></div>
+
+""" + STAFF_JS + """
+
+<script>
+
+const output =
+    document.getElementById("output");
+
+const input =
+    document.getElementById("command");
+
+
+function print(text){
+
+    output.textContent +=
+        "\\n" +
+        text +
+        "\\n";
+
+    output.scrollTop =
+        output.scrollHeight;
+}
+
+
+async function runCommand(){
+
+    const command =
+        input.value.trim();
+
+    if(!command){
+        return;
+    }
+
+    print(
+        "root@matia:~$ " +
+        command
+    );
+
+    input.value = "";
+
+    try{
+
+        const response =
+            await fetch(
+                "{{ command_url }}",
+                {
+                    method:"POST",
+                    headers:{
+                        "Content-Type":"application/json"
+                    },
+                    body:JSON.stringify({
+                        command:command
+                    })
+                }
+            );
+
+        const data =
+            await response.json();
+
+        if(data.output === "__CLEAR__"){
+
+            output.textContent = "";
+
+        }else{
+
+            print(
+                data.output || ""
+            );
+        }
+
+    }catch(error){
+
+        print(
+            "ERROR: " +
+            error
+        );
+    }
+}
+
+
+input.addEventListener(
+    "keydown",
+    function(event){
+
+        if(event.key === "Enter"){
+            runCommand();
+        }
+
+    }
+);
+
+</script>
+
+</body>
+</html>
+"""
+
+
+@app.get("/owner/terminal")
+@role_required("owner")
+def owner_terminal():
+
+    return render_template_string(
+        TERMINAL_PAGE,
+        role_name="owner",
+        email=session.get("email", ""),
+        version=APP_VERSION,
+        dashboard_url="/owner",
+        command_url="/owner/command",
+    )
+
+
+@app.get("/admin/terminal")
+@role_required("admin")
+def admin_terminal():
+
+    return render_template_string(
+        TERMINAL_PAGE,
+        role_name="admin",
+        email=session.get("email", ""),
+        version=APP_VERSION,
+        dashboard_url="/admin",
+        command_url="/admin/command",
+    )
+
+
+# ============================================================
+# COMMAND API
+# ============================================================
+
+@app.post("/owner/command")
+@role_required("owner")
+def owner_command():
+
+    data = request.get_json(silent=True) or {}
+
+    command = clean_text(
+        data.get("command"),
+        5000,
+    )
+
+    output = execute_command(
+        command,
+        owner=True,
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "output": output,
+        }
+    )
+
+
+@app.post("/admin/command")
+@role_required("admin")
+def admin_command():
+
+    data = request.get_json(silent=True) or {}
+
+    command = clean_text(
+        data.get("command"),
+        5000,
+    )
+
+    output = execute_command(
+        command,
+        owner=False,
+    )
+
+    return jsonify(
+        {
+            "ok": True,
+            "output": output,
+        }
+    )
+
+
+# ============================================================
+# ADMIN TERMINAL LINK
+# ============================================================
+
+@app.get("/admin/tools")
+@staff_required
+def admin_tools():
+
+    target = (
+        "/owner/terminal"
+        if is_owner()
+        else "/admin/terminal"
+    )
+
+    return redirect(target)
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.get("/health")
+def health():
+
+    try:
+
+        row = query_one(
+            "SELECT 1 AS ok"
+        )
+
+        database = (
+            row["ok"] == 1
+            if row
+            else False
+        )
+
+    except Exception:
+
+        database = False
+
+    return jsonify(
+        {
+            "status": "ok" if database else "degraded",
+            "app": APP_NAME,
+            "version": APP_VERSION,
+            "database": database,
+            "time": now(),
+        }
+    )
+
+
+# ============================================================
+# 404
+# ============================================================
+
+@app.errorhandler(404)
+def not_found(error):
+
+    return render_template_string(
+        """
+        <!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <title>404</title>
+        <style>
+        body{
+            background:#020303;
+            color:#00ff9c;
+            font-family:Consolas,monospace;
+            padding:50px;
+        }
+        a{color:#00ff9c}
+        </style>
+        </head>
+        <body>
+        <h1>404 // NODE NOT FOUND</h1>
+        <p>The requested route does not exist.</p>
+        <a href="/">Return to main system</a>
+        </body>
+        </html>
+        """
+    ), 404
+
+
+# ============================================================
+# 500
+# ============================================================
+
+@app.errorhandler(500)
+def server_error(error):
+
+    return render_template_string(
+        """
+        <!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <title>500</title>
+        <style>
+        body{
+            background:#020303;
+            color:#ff7777;
+            font-family:Consolas,monospace;
+            padding:50px;
+        }
+        a{color:#00ff9c}
+        </style>
+        </head>
+        <body>
+        <h1>500 // INTERNAL ERROR</h1>
+        <p>The application encountered an internal error.</p>
+        <a href="/">Return to main system</a>
+        </body>
+        </html>
+        """
+    ), 500
+
+
+# ============================================================
+# DATABASE INIT
+# ============================================================
+
+init_db()
+
+
+# ============================================================
+# LOCAL DEVELOPMENT
+# ============================================================
+
+if __name__ == "__main__":
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            "5000",
+        )
+    )
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+    )
